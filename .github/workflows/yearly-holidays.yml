@@ -1,5 +1,8 @@
 name: yearly-holidays
 
+permissions:
+  contents: read
+
 on:
   schedule:
     # 매년 1월 2일 00:10 UTC (한국시간 1월 2일 09:10)

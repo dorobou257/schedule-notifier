@@ -1,5 +1,8 @@
 name: daily-notify
 
+permissions:
+  contents: read
+
 on:
   schedule:
     # 한국시간 08:00 = UTC 전날 23:00
