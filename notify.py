@@ -95,11 +95,7 @@ def build_routine_lines(weekday: int) -> list:
 
 def build_email_body(date_str: str, weekday: int, schedule_pages: list, novel_pages: list) -> str:
     holiday_pages = [p for p in schedule_pages if get_checkbox(p, "공휴일")]
-    schedule_only = [
-        p
-        for p in schedule_pages
-        if get_select(p, "종류") == "일정" and not get_checkbox(p, "공휴일")
-    ]
+    schedule_only = [p for p in schedule_pages if get_select(p, "종류") == "일정"]
     todo_pages = [p for p in schedule_pages if get_select(p, "종류") in ("할일", "과제")]
 
     lines = []

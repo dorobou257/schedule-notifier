@@ -29,7 +29,7 @@ HEADERS = {
 
 def fetch_holidays(year: int) -> list:
     """해당 연도의 공휴일 목록을 [(YYYY-MM-DD, 이름), ...] 형태로 반환."""
-    kr_holidays = holidays.KR(years=year)
+    kr_holidays = holidays.KR(years=year, language="ko")
     return sorted((d.isoformat(), name) for d, name in kr_holidays.items())
 
 
@@ -60,7 +60,7 @@ def create_holiday_page(date_str: str, name: str) -> None:
         "properties": {
             "이름": {"title": [{"text": {"content": name}}]},
             "날짜": {"date": {"start": date_str}},
-            "종류": {"select": {"name": "일정"}},
+            "종류": {"select": {"name": "공휴일"}},
             "공휴일": {"checkbox": True},
         },
     }
