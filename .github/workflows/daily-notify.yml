@@ -1,0 +1,25 @@
+name: daily-notify
+
+on:
+  schedule:
+    # 한국시간 08:00 = UTC 전날 23:00
+    - cron: "0 23 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install requests
+      - run: python notify.py
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          SCHEDULE_DB_ID: ${{ secrets.SCHEDULE_DB_ID }}
+          NOVEL_DB_ID: ${{ secrets.NOVEL_DB_ID }}
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}

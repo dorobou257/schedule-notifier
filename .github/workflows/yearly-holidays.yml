@@ -1,0 +1,22 @@
+name: yearly-holidays
+
+on:
+  schedule:
+    # 매년 1월 2일 00:10 UTC (한국시간 1월 2일 09:10)
+    - cron: "10 0 2 1 *"
+  workflow_dispatch: {}
+
+jobs:
+  update-holidays:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install requests
+      - run: python update_holidays.py
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          SCHEDULE_DB_ID: ${{ secrets.SCHEDULE_DB_ID }}
+          HOLIDAY_API_KEY: ${{ secrets.HOLIDAY_API_KEY }}
