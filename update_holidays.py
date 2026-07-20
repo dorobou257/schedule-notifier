@@ -1,24 +1,23 @@
 """
-매년 1회(예: 1월 2일) 실행되어, 한국천문연구원 특일 정보 API(공공데이터포털)를 조회해
-앞으로 1년치 대한민국 공휴일을 노션 [일정] DB에 채워 넣는 스크립트.
+매년 1회(예: 1월 2일) 실행되어, 파이썬 holidays 라이브러리로 앞으로 1년치
+대한민국 공휴일을 계산해 노션 [일정] DB에 채워 넣는 스크립트.
 
 필요한 환경변수(GitHub Actions Secrets):
 - NOTION_TOKEN
 - SCHEDULE_DB_ID
-- HOLIDAY_API_KEY   : 공공데이터포털에서 발급받은 "한국천문연구원_특일 정보" 인증키(디코딩된 값)
 
-참고: 이 API는 보통 향후 1년 치 정도의 확정된 공휴일만 제공합니다.
-      매년 초에 이 스크립트를 실행하면 그 해 공휴일이 자동으로 채워집니다.
+공공데이터포털 API와 달리 별도 활용신청/인증키 없이,
+holidays 라이브러리가 로컬에서 계산한 값을 그대로 사용한다.
 """
 
 import os
 from datetime import datetime
 
+import holidays
 import requests
 
 NOTION_TOKEN = os.environ["NOTION_TOKEN"]
 SCHEDULE_DB_ID = os.environ["SCHEDULE_DB_ID"]
-HOLIDAY_API_KEY = os.environ["HOLIDAY_API_KEY"]
 
 NOTION_API = "https://api.notion.com/v1"
 HEADERS = {
@@ -27,38 +26,11 @@ HEADERS = {
     "Content-Type": "application/json",
 }
 
-HOLIDAY_API_URL = (
-    "https://apis.data.go.kr/B090041/openapi/service/SpcdeInfoService/getHoliDeInfo"
-)
-
 
 def fetch_holidays(year: int) -> list:
-    """해당 연도의 공휴일 목록을 [(YYYYMMDD, 이름), ...] 형태로 반환."""
-    holidays = []
-    for month in range(1, 13):
-        params = {
-            "serviceKey": HOLIDAY_API_KEY,
-            "solYear": year,
-            "solMonth": f"{month:02d}",
-            "_type": "json",
-            "numOfRows": "30",
-        }
-        resp = requests.get(HOLIDAY_API_URL, params=params)
-        resp.raise_for_status()
-        data = resp.json()
-        items = (
-            data.get("response", {})
-            .get("body", {})
-            .get("items", {})
-            .get("item", [])
-        )
-        if isinstance(items, dict):
-            items = [items]
-        for item in items:
-            # isHoliday: "Y"인 것만 실제 공휴일
-            if item.get("isHoliday") == "Y":
-                holidays.append((str(item["locdate"]), item["dateName"]))
-    return holidays
+    """해당 연도의 공휴일 목록을 [(YYYY-MM-DD, 이름), ...] 형태로 반환."""
+    kr_holidays = holidays.KR(years=year)
+    return sorted((d.isoformat(), name) for d, name in kr_holidays.items())
 
 
 def date_already_exists(date_str: str) -> bool:
@@ -98,15 +70,14 @@ def create_holiday_page(date_str: str, name: str) -> None:
 
 def main():
     year = datetime.now().year
-    holidays = fetch_holidays(year)
+    holiday_list = fetch_holidays(year)
     added = 0
-    for locdate, name in holidays:
-        date_str = f"{locdate[0:4]}-{locdate[4:6]}-{locdate[6:8]}"
+    for date_str, name in holiday_list:
         if not date_already_exists(date_str):
             create_holiday_page(date_str, name)
             added += 1
             print(f"추가됨: {date_str} {name}")
-    print(f"완료. 총 {len(holidays)}개 중 {added}개 신규 추가.")
+    print(f"완료. 총 {len(holiday_list)}개 중 {added}개 신규 추가.")
 
 
 if __name__ == "__main__":

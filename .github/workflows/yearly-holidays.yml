@@ -14,9 +14,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install requests
+      - run: pip install requests holidays
       - run: python update_holidays.py
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           SCHEDULE_DB_ID: ${{ secrets.SCHEDULE_DB_ID }}
-          HOLIDAY_API_KEY: ${{ secrets.HOLIDAY_API_KEY }}

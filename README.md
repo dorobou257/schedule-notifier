@@ -4,7 +4,7 @@
 
 ## 폴더 구성
 - `notify.py` : 매일 실행되는 메인 스크립트
-- `update_holidays.py` : 매년 초 1회, 대한민국 공휴일을 노션에 채워 넣는 스크립트
+- `update_holidays.py` : 매년 초 1회, 파이썬 `holidays` 라이브러리로 대한민국 공휴일을 계산해 노션에 채워 넣는 스크립트 (별도 API 키 불필요)
 - `.github/workflows/daily-notify.yml` : 매일 08시 실행 스케줄러
 - `.github/workflows/yearly-holidays.yml` : 매년 1월 초 실행 스케줄러
 
@@ -25,14 +25,10 @@
 2. "앱 비밀번호" 생성 → 16자리 값이 `GMAIL_APP_PASSWORD`
 3. 보내는 사람 주소가 `GMAIL_ADDRESS`, 받는 사람(본인) 주소가 `MAIL_TO`
 
-### 4. 공공데이터포털 공휴일 API 키 (공휴일 자동화용)
-1. https://www.data.go.kr/data/15012690/openapi.do 에서 활용신청
-2. 승인 후 마이페이지에서 서비스키(디코딩된 값) 확인 → `HOLIDAY_API_KEY`
-
-### 5. GitHub 저장소 설정
+### 4. GitHub 저장소 설정
 1. 이 폴더를 새 GitHub 저장소에 push
-2. 저장소 → Settings → Secrets and variables → Actions → New repository secret 으로 아래 7개 등록:
-   `NOTION_TOKEN`, `SCHEDULE_DB_ID`, `NOVEL_DB_ID`, `GMAIL_ADDRESS`, `GMAIL_APP_PASSWORD`, `MAIL_TO`, `HOLIDAY_API_KEY`
+2. 저장소 → Settings → Secrets and variables → Actions → New repository secret 으로 아래 6개 등록:
+   `NOTION_TOKEN`, `SCHEDULE_DB_ID`, `NOVEL_DB_ID`, `GMAIL_ADDRESS`, `GMAIL_APP_PASSWORD`, `MAIL_TO`
 3. Actions 탭에서 워크플로우가 활성화되어 있는지 확인 (기본적으로 자동 활성화됨)
 4. 바로 테스트해보고 싶으면 Actions 탭 → 해당 워크플로우 → "Run workflow" 버튼으로 수동 실행 가능
 
