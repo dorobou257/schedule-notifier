@@ -4,9 +4,9 @@ permissions:
   contents: read
 
 on:
-  schedule:
-    # 한국시간 08:00 = UTC 전날 23:00
-    - cron: "0 23 * * *"
+  # GitHub 자체 schedule 트리거는 정시(00분)에 지연/누락이 잦아
+  # 외부 크론 서비스(cron-job.org)가 매일 08:00 KST에 이 workflow_dispatch를
+  # 직접 호출하는 방식으로 대체했다. 자세한 내용은 README 참고.
   workflow_dispatch: {}
 
 jobs:
