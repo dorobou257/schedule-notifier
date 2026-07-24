@@ -1,7 +1,7 @@
 name: daily-notify
 
 permissions:
-  contents: read
+  contents: write # docs/today.json을 저장소에 커밋해서 GitHub Pages(PWA)에 반영하기 위해 필요
 
 on:
   # GitHub 자체 schedule 트리거는 정시(00분)에 지연/누락이 잦아
@@ -23,6 +23,10 @@ jobs:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           SCHEDULE_DB_ID: ${{ secrets.SCHEDULE_DB_ID }}
           NOVEL_DB_ID: ${{ secrets.NOVEL_DB_ID }}
-          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
-          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
-          MAIL_TO: ${{ secrets.MAIL_TO }}
+      - name: docs/today.json 커밋 & 푸시
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/today.json
+          git diff --cached --quiet && echo "변경 없음, 커밋 생략" || git commit -m "오늘의 일정 갱신: $(date -u +%F)"
+          git push

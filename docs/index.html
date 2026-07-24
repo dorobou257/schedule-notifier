@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#2E6C5A" />
+<link rel="manifest" href="./manifest.json" />
+<link rel="apple-touch-icon" href="./icon-192.png" />
+<title>일정 알리미</title>
+<style>
+  :root{
+    --bg:#F4F5EF;
+    --surface:#FFFFFF;
+    --ink:#1C2420;
+    --muted:#5B655F;
+    --rule:#DEDFD2;
+    --pine:#2E6C5A;
+    --pine-soft:rgba(46,108,90,.09);
+    --red:#B23A2E;
+    --red-soft:rgba(178,58,46,.08);
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#141815; --surface:#1B211C; --ink:#E7ECE7; --muted:#93A199;
+      --rule:#28312A; --pine:#5CB89B; --pine-soft:rgba(92,184,155,.14);
+      --red:#E1786C; --red-soft:rgba(225,120,108,.14);
+    }
+  }
+  *{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body{ height:100%; }
+  body{
+    margin:0;
+    background:var(--bg);
+    color:var(--ink);
+    font-family:"Apple SD Gothic Neo","Malgun Gothic","Pretendard",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+    padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+  header{
+    padding:28px 20px 16px;
+    display:flex;
+    flex-direction:column;
+    gap:2px;
+  }
+  header .eyebrow{
+    font-size:12px; letter-spacing:.12em; text-transform:uppercase;
+    color:var(--pine); font-weight:700;
+  }
+  header h1{ margin:2px 0 0; font-size:22px; font-weight:800; }
+  main{ padding:4px 16px 40px; display:flex; flex-direction:column; gap:16px; }
+  .banner{
+    background:var(--red-soft); color:var(--red); border:1px solid var(--red);
+    border-radius:12px; padding:12px 16px; font-weight:700; font-size:14.5px;
+  }
+  section.card{
+    background:var(--surface); border:1px solid var(--rule); border-radius:14px;
+    padding:16px 18px; box-shadow:0 1px 2px rgba(0,0,0,.04);
+  }
+  section.card h2{
+    margin:0 0 10px; font-size:13px; letter-spacing:.04em; text-transform:uppercase;
+    color:var(--pine); font-weight:700;
+  }
+  ul{ margin:0; padding:0; list-style:none; }
+  li{
+    position:relative; padding:8px 0 8px 18px; font-size:15px; line-height:1.5;
+    border-bottom:1px solid var(--rule);
+  }
+  li:last-child{ border-bottom:none; }
+  li::before{
+    content:""; position:absolute; left:2px; top:17px; width:6px; height:6px;
+    border-radius:50%; background:var(--pine);
+  }
+  p.empty{ margin:0; color:var(--muted); font-size:14.5px; }
+  #status{
+    text-align:center; color:var(--muted); font-size:12.5px; padding:8px 0 0;
+  }
+  #refresh{
+    display:block; margin:6px auto 0; background:none; border:none; color:var(--pine);
+    font-size:13px; font-weight:700; padding:8px; cursor:pointer;
+  }
+</style>
+</head>
+<body>
+  <header>
+    <span class="eyebrow" id="date-label">일정 알리미</span>
+    <h1 id="title">오늘 정리</h1>
+  </header>
+  <main id="app">
+    <p class="empty">불러오는 중…</p>
+  </main>
+  <div id="status"></div>
+  <button id="refresh">새로고침</button>
+
+<script>
+async function loadToday() {
+  const statusEl = document.getElementById("status");
+  try {
+    const res = await fetch("./today.json?t=" + Date.now(), { cache: "no-store" });
+    const data = await res.json();
+    render(data);
+    statusEl.textContent = "";
+  } catch (e) {
+    statusEl.textContent = "새 데이터를 불러오지 못했습니다. 이전에 저장된 화면입니다.";
+  }
+}
+
+function el(tag, props = {}, children = []) {
+  const node = document.createElement(tag);
+  Object.assign(node, props);
+  children.forEach((c) => node.appendChild(c));
+  return node;
+}
+
+function listCard(title, items, emptyMessage) {
+  const card = el("section", { className: "card" });
+  card.appendChild(el("h2", { textContent: title }));
+  if (items && items.length) {
+    const ul = el("ul");
+    items.forEach((text) => ul.appendChild(el("li", { textContent: text })));
+    card.appendChild(ul);
+  } else {
+    card.appendChild(el("p", { className: "empty", textContent: emptyMessage }));
+  }
+  return card;
+}
+
+function render(data) {
+  document.getElementById("date-label").textContent = data.date || "일정 알리미";
+  document.getElementById("title").textContent = (data.date ? data.date + " " : "") + "오늘 정리";
+
+  const app = document.getElementById("app");
+  app.innerHTML = "";
+
+  if (data.holiday_banner) {
+    app.appendChild(el("div", { className: "banner", textContent: data.holiday_banner }));
+  }
+
+  app.appendChild(listCard(data.schedule_title || "오늘의 일정", data.schedule_items, "등록된 일정이 없습니다."));
+
+  if (data.todo_items && data.todo_items.length) {
+    app.appendChild(listCard("오늘의 할일", data.todo_items, ""));
+  }
+
+  app.appendChild(listCard("오늘의 소설 일정", data.novel_items, data.novel_empty_message || "오늘은 등록된 소설 일정이 없습니다."));
+}
+
+document.getElementById("refresh").addEventListener("click", loadToday);
+loadToday();
+
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("./service-worker.js");
+  });
+}
+</script>
+</body>
+</html>

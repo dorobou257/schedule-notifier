@@ -1,0 +1,9 @@
+{
+  "date": "",
+  "holiday_banner": null,
+  "schedule_title": "오늘의 일정",
+  "schedule_items": ["아직 데이터가 없습니다. 첫 자동 실행을 기다려주세요."],
+  "todo_items": [],
+  "novel_items": [],
+  "novel_empty_message": "오늘은 등록된 소설 일정이 없습니다."
+}
