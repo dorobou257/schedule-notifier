@@ -1,7 +1,9 @@
 name: daily-notify
 
 permissions:
-  contents: write # docs/today.json을 저장소에 커밋해서 GitHub Pages(PWA)에 반영하기 위해 필요
+  contents: write # docs/today.json을 저장소에 커밋하기 위해 필요
+  pages: write    # GitHub Pages에 직접 배포하기 위해 필요
+  id-token: write # GitHub Pages 배포 인증에 필요
 
 on:
   # GitHub 자체 schedule 트리거는 정시(00분)에 지연/누락이 잦아
@@ -12,6 +14,9 @@ on:
 jobs:
   notify:
     runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -30,3 +35,9 @@ jobs:
           git add docs/today.json
           git diff --cached --quiet && echo "변경 없음, 커밋 생략" || git commit -m "오늘의 일정 갱신: $(date -u +%F)"
           git push
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+      - id: deployment
+        uses: actions/deploy-pages@v4
