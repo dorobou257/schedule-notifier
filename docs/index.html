@@ -23,6 +23,15 @@
     --red-soft:rgba(178,58,46,.09);
     --shadow:0 1px 2px rgba(28,36,32,.04), 0 6px 20px rgba(28,36,32,.06);
     color-scheme: light;
+
+    --cat-slate-ink:#3D4759; --cat-slate-soft:rgba(100,110,130,.13);
+    --cat-terracotta-ink:#7A3D1D; --cat-terracotta-soft:rgba(196,106,58,.14);
+    --cat-violet-ink:#4A3580; --cat-violet-soft:rgba(124,92,196,.13);
+    --cat-steelblue-ink:#264A73; --cat-steelblue-soft:rgba(58,110,168,.13);
+    --cat-moss-ink:#4A5A22; --cat-moss-soft:rgba(122,140,60,.15);
+    --cat-teal-ink:#1F5C54; --cat-teal-soft:rgba(58,140,130,.14);
+    --cat-amber-ink:#7A5A16; --cat-amber-soft:rgba(196,150,58,.16);
+    --cat-rose-ink:#7A3550; --cat-rose-soft:rgba(180,90,120,.14);
   }
   @media (prefers-color-scheme: dark){
     :root{
@@ -32,6 +41,15 @@
       --red:#E1786C; --red-soft:rgba(225,120,108,.13);
       --shadow:0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.35);
       color-scheme: dark;
+
+      --cat-slate-ink:#B8C2D9; --cat-slate-soft:rgba(140,150,170,.18);
+      --cat-terracotta-ink:#F0B48C; --cat-terracotta-soft:rgba(224,140,90,.18);
+      --cat-violet-ink:#C9B8F0; --cat-violet-soft:rgba(160,130,224,.18);
+      --cat-steelblue-ink:#A8CBF0; --cat-steelblue-soft:rgba(100,150,214,.18);
+      --cat-moss-ink:#D0E0A0; --cat-moss-soft:rgba(160,180,100,.18);
+      --cat-teal-ink:#9EE0D4; --cat-teal-soft:rgba(90,180,168,.18);
+      --cat-amber-ink:#F0D2A0; --cat-amber-soft:rgba(224,180,90,.2);
+      --cat-rose-ink:#F0B8D0; --cat-rose-soft:rgba(214,120,150,.18);
     }
   }
 
@@ -127,6 +145,7 @@
     background:var(--pine-soft); border-radius:8px; padding:4px 6px;
   }
   .chip-time.empty{ visibility:hidden; }
+  .chip-time[data-cat]{ color:var(--cat-ink); background:var(--cat-soft); }
 
   .row-body{ display:flex; flex-direction:column; gap:3px; min-width:0; padding-top:2px; }
   .row-body .tags{ display:flex; gap:5px; flex-wrap:wrap; }
@@ -134,6 +153,20 @@
     font-size:11px; font-weight:700; color:var(--muted);
     background:var(--surface-2); border-radius:6px; padding:2px 6px;
   }
+  .tag[data-cat]{ color:var(--cat-ink); background:var(--cat-soft); }
+  .tag.outline[data-cat]{
+    color:var(--cat-ink); background:transparent;
+    border:1.5px solid var(--cat-ink); padding:1px 6px;
+  }
+
+  [data-cat="slate"]{ --cat-ink:var(--cat-slate-ink); --cat-soft:var(--cat-slate-soft); }
+  [data-cat="terracotta"]{ --cat-ink:var(--cat-terracotta-ink); --cat-soft:var(--cat-terracotta-soft); }
+  [data-cat="violet"]{ --cat-ink:var(--cat-violet-ink); --cat-soft:var(--cat-violet-soft); }
+  [data-cat="steelblue"]{ --cat-ink:var(--cat-steelblue-ink); --cat-soft:var(--cat-steelblue-soft); }
+  [data-cat="moss"]{ --cat-ink:var(--cat-moss-ink); --cat-soft:var(--cat-moss-soft); }
+  [data-cat="teal"]{ --cat-ink:var(--cat-teal-ink); --cat-soft:var(--cat-teal-soft); }
+  [data-cat="amber"]{ --cat-ink:var(--cat-amber-ink); --cat-soft:var(--cat-amber-soft); }
+  [data-cat="rose"]{ --cat-ink:var(--cat-rose-ink); --cat-soft:var(--cat-rose-soft); }
   .row-body .text{ font-size:15px; line-height:1.42; word-break:keep-all; }
 
   p.empty{ margin:0; padding:6px 14px 14px; color:var(--faint); font-size:14px; }
@@ -172,23 +205,66 @@ const ICONS = {
 
 function el(tag, props = {}, children = []) {
   const node = document.createElement(tag);
-  Object.assign(node, props);
+  const { dataset, ...rest } = props;
+  Object.assign(node, rest);
+  if (dataset) Object.assign(node.dataset, dataset);
   children.forEach((c) => node.appendChild(c));
   return node;
 }
 
-function row(item) {
+const WORK_PALETTE = ["slate", "terracotta", "violet", "steelblue", "moss", "teal", "amber", "rose"];
+
+function workCategory(name) {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
+  return WORK_PALETTE[hash % WORK_PALETTE.length];
+}
+
+function routineCategory(text) {
+  if (text.includes("기상") || text.includes("취침")) return "slate";
+  if (text.includes("식사")) return "terracotta";
+  if (text.includes("집필")) return "violet";
+  if (text.includes("작업")) return "steelblue";
+  if (text === "운동") return "moss";
+  if (text.includes("휴식")) return "teal";
+  return null;
+}
+
+const TODO_KIND_CATEGORY = { "할일": "amber", "과제": "rose" };
+const NOVEL_STAGE_CATEGORY = {
+  "설정": "slate", "시놉시스": "violet", "트리트먼트": "steelblue",
+  "초고": "amber", "퇴고": "terracotta", "연재": "moss",
+};
+
+function row(item, sectionType) {
   const li = el("li", { className: "row" });
   const timeText = (item.time || "").trim();
+  const timeCat = sectionType === "schedule" ? routineCategory(item.text || "") : null;
   li.appendChild(el("span", {
     className: "chip-time mono" + (timeText ? "" : " empty"),
     textContent: timeText || "--",
+    dataset: timeCat ? { cat: timeCat } : {},
   }));
 
   const body = el("div", { className: "row-body" });
-  if (item.tags && item.tags.filter(Boolean).length) {
+  const tags = (item.tags || []).filter(Boolean);
+  if (tags.length) {
     const tagsWrap = el("div", { className: "tags" });
-    item.tags.filter(Boolean).forEach((t) => tagsWrap.appendChild(el("span", { className: "tag", textContent: t })));
+    tags.forEach((t, i) => {
+      let cat = null;
+      let outline = false;
+      if (sectionType === "todo") {
+        cat = TODO_KIND_CATEGORY[t] || null;
+      } else if (sectionType === "novel") {
+        if (i === 0) { cat = workCategory(t); outline = true; }
+        else { cat = NOVEL_STAGE_CATEGORY[t] || null; }
+      }
+      tagsWrap.appendChild(el("span", {
+        className: "tag" + (outline ? " outline" : ""),
+        textContent: t,
+        dataset: cat ? { cat } : {},
+      }));
+    });
     body.appendChild(tagsWrap);
   }
   body.appendChild(el("span", { className: "text", textContent: item.text || "" }));
@@ -196,7 +272,7 @@ function row(item) {
   return li;
 }
 
-function card(iconKey, title, items, count) {
+function card(iconKey, title, items, count, sectionType) {
   const section = el("section", { className: "card" });
   const head = el("div", { className: "card-head" });
   head.appendChild(el("span", { className: "icon", innerHTML: ICONS[iconKey] }));
@@ -208,7 +284,7 @@ function card(iconKey, title, items, count) {
 
   if (items && items.length) {
     const ul = el("ul", { className: "rows" });
-    items.forEach((it) => ul.appendChild(row(it)));
+    items.forEach((it) => ul.appendChild(row(it, sectionType)));
     section.appendChild(ul);
   } else {
     section.appendChild(el("p", { className: "empty", textContent: "등록된 항목이 없습니다." }));
@@ -231,13 +307,13 @@ function render(data) {
     app.appendChild(banner);
   }
 
-  app.appendChild(card("clock", data.schedule_title || "오늘의 일정", data.schedule_items, data.schedule_items ? data.schedule_items.length : 0));
+  app.appendChild(card("clock", data.schedule_title || "오늘의 일정", data.schedule_items, data.schedule_items ? data.schedule_items.length : 0, "schedule"));
 
   if (data.todo_items && data.todo_items.length) {
-    app.appendChild(card("check", "오늘의 할일", data.todo_items, data.todo_items.length));
+    app.appendChild(card("check", "오늘의 할일", data.todo_items, data.todo_items.length, "todo"));
   }
 
-  app.appendChild(card("book", "오늘의 소설 일정", data.novel_items, data.novel_items ? data.novel_items.length : 0));
+  app.appendChild(card("book", "오늘의 소설 일정", data.novel_items, data.novel_items ? data.novel_items.length : 0, "novel"));
 }
 
 async function loadToday(isRefresh) {
