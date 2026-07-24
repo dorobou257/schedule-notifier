@@ -7,6 +7,17 @@
 <link rel="manifest" href="./manifest.json" />
 <link rel="apple-touch-icon" href="./icon-192.png" />
 <title>일정 알리미</title>
+<script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
+<script>
+  window.OneSignalDeferred = window.OneSignalDeferred || [];
+  OneSignalDeferred.push(async function (OneSignal) {
+    await OneSignal.init({
+      appId: "9bf67400-2aa3-4c64-b5af-7a014ab0d6cd",
+      serviceWorkerParam: { scope: "/schedule-notifier/" },
+      serviceWorkerPath: "/schedule-notifier/service-worker.js",
+    });
+  });
+</script>
 <style>
   :root{
     --bg:#F4F5EF;

@@ -6,9 +6,10 @@ permissions:
   id-token: write # GitHub Pages 배포 인증에 필요
 
 on:
-  # GitHub 자체 schedule 트리거는 정시(00분)에 지연/누락이 잦아
-  # 외부 크론 서비스(cron-job.org)가 매일 08:00 KST에 이 workflow_dispatch를
-  # 직접 호출하는 방식으로 대체했다. 자세한 내용은 README 참고.
+  # GitHub 자체 schedule 트리거는 지연/누락이 잦아, 외부 크론 서비스
+  # (cron-job.org)가 5분 간격으로 이 workflow_dispatch를 직접 호출하는
+  # 방식을 쓴다. 화면(today.json) 갱신 + 시간대별 푸시 알림을 겸한다.
+  # 자세한 내용은 README 참고.
   workflow_dispatch: {}
 
 jobs:
@@ -28,6 +29,8 @@ jobs:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           SCHEDULE_DB_ID: ${{ secrets.SCHEDULE_DB_ID }}
           NOVEL_DB_ID: ${{ secrets.NOVEL_DB_ID }}
+          ONESIGNAL_APP_ID: ${{ secrets.ONESIGNAL_APP_ID }}
+          ONESIGNAL_REST_API_KEY: ${{ secrets.ONESIGNAL_REST_API_KEY }}
       - name: docs/today.json 커밋 & 푸시
         run: |
           git config user.name "github-actions[bot]"

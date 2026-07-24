@@ -1,12 +1,18 @@
 """
-매일 08:00(KST)에 실행되어 노션의 [일정] / [소설] 캘린더를 확인하고
+5분 간격으로 실행되어 노션의 [일정] / [소설] 캘린더를 확인하고
 docs/today.json으로 정리해서 저장하는 스크립트.
 GitHub Pages로 서비스되는 PWA(docs/index.html)가 이 파일을 읽어서 화면에 보여준다.
 
+동시에, 지금 막 시작하는 항목(식사 제외)이 있으면 OneSignal로 푸시 알림을
+보낸다. 같은 시각에 겹치는 항목은 하나로 합쳐서 보내고, 이미 보낸 시각은
+today.json에 기록해 다시 보내지 않는다.
+
 필요한 환경변수(GitHub Actions Secrets로 설정):
-- NOTION_TOKEN        : 노션 Integration 토큰
-- SCHEDULE_DB_ID       : [일정] 데이터베이스 ID
-- NOVEL_DB_ID          : [소설] 데이터베이스 ID
+- NOTION_TOKEN          : 노션 Integration 토큰
+- SCHEDULE_DB_ID        : [일정] 데이터베이스 ID
+- NOVEL_DB_ID           : [소설] 데이터베이스 ID
+- ONESIGNAL_APP_ID      : OneSignal 앱 ID
+- ONESIGNAL_REST_API_KEY: OneSignal REST API 키
 """
 
 import json
@@ -19,6 +25,8 @@ import requests
 NOTION_TOKEN = os.environ["NOTION_TOKEN"]
 SCHEDULE_DB_ID = os.environ["SCHEDULE_DB_ID"]
 NOVEL_DB_ID = os.environ["NOVEL_DB_ID"]
+ONESIGNAL_APP_ID = os.environ["ONESIGNAL_APP_ID"]
+ONESIGNAL_REST_API_KEY = os.environ["ONESIGNAL_REST_API_KEY"]
 
 NOTION_API = "https://api.notion.com/v1"
 HEADERS = {
@@ -27,8 +35,24 @@ HEADERS = {
     "Content-Type": "application/json",
 }
 
+ONESIGNAL_API = "https://onesignal.com/api/v1/notifications"
+APP_URL = "https://dorobou257.github.io/schedule-notifier/"
+
 KST = timezone(timedelta(hours=9))
 TODAY_JSON_PATH = Path(__file__).parent / "docs" / "today.json"
+
+# 고정 루틴 항목의 실제 알림 시각. 식사와 취침은 여기 없으므로 알림이 안 간다.
+ROUTINE_NOTIFY_TIMES = {
+    "기상": "08:00",
+    "1차 집필": "09:00",
+    "1차 작업": "11:00",
+    "2차 집필": "14:00",
+    "2차 작업": "16:00",
+    "3차 집필": "19:00",
+    "운동": "21:00",
+    "3차 작업": "21:00",
+    "휴식": "22:00",
+}
 
 
 def today_kst() -> datetime:
@@ -141,6 +165,67 @@ def build_today_data(date_str: str, weekday: int, schedule_pages: list, novel_pa
     }
 
 
+def load_previous_data() -> dict:
+    if not TODAY_JSON_PATH.exists():
+        return {}
+    try:
+        return json.loads(TODAY_JSON_PATH.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def collect_due_notifications(data: dict, now_str: str, already_sent: set) -> list:
+    """(알림시각, [내용, ...]) 목록을 시간순으로 반환한다.
+    now_str(HH:MM) 시각이 이미 지났고, 아직 안 보낸 시각만 대상으로 한다."""
+    by_time: dict[str, list[str]] = {}
+
+    for item in data.get("schedule_items", []):
+        if data.get("is_routine"):
+            t = ROUTINE_NOTIFY_TIMES.get(item["text"])
+        else:
+            t = item.get("time") or None
+        if t:
+            by_time.setdefault(t, []).append(item["text"])
+
+    for item in data.get("todo_items", []):
+        t = item.get("time") or None
+        if t:
+            tag = item["tags"][0] if item.get("tags") else ""
+            by_time.setdefault(t, []).append(f"[{tag}] {item['text']}")
+
+    for item in data.get("novel_items", []):
+        t = item.get("time") or None
+        if t:
+            label = " ".join(tag for tag in (item.get("tags") or []) if tag)
+            by_time.setdefault(t, []).append(f"[{label}] {item['text']}" if label else item["text"])
+
+    due = [
+        (t, texts) for t, texts in by_time.items()
+        if t <= now_str and t not in already_sent
+    ]
+    due.sort(key=lambda pair: pair[0])
+    return due
+
+
+def send_push(title: str, message: str) -> None:
+    payload = {
+        "app_id": ONESIGNAL_APP_ID,
+        "included_segments": ["Subscribed Users"],
+        "headings": {"en": title},
+        "contents": {"en": message},
+        "url": APP_URL,
+    }
+    resp = requests.post(
+        ONESIGNAL_API,
+        headers={
+            "Authorization": f"Key {ONESIGNAL_REST_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        json=payload,
+    )
+    resp.raise_for_status()
+
+
 def write_today_json(data: dict) -> None:
     TODAY_JSON_PATH.write_text(
         json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -150,14 +235,25 @@ def write_today_json(data: dict) -> None:
 def main():
     now = today_kst()
     date_str = now.strftime("%Y-%m-%d")
+    now_str = now.strftime("%H:%M")
     weekday = now.weekday()  # 월=0 ... 일=6
 
     schedule_pages = query_database(SCHEDULE_DB_ID, date_str)
     novel_pages = query_database(NOVEL_DB_ID, date_str)
 
     data = build_today_data(date_str, weekday, schedule_pages, novel_pages)
+
+    previous = load_previous_data()
+    already_sent = set(previous.get("notified_at", [])) if previous.get("date") == date_str else set()
+
+    due = collect_due_notifications(data, now_str, already_sent)
+    for notify_time, texts in due:
+        send_push(f"{notify_time} 일정", " · ".join(texts))
+        already_sent.add(notify_time)
+
+    data["notified_at"] = sorted(already_sent)
     write_today_json(data)
-    print("today.json 갱신 완료:", date_str)
+    print(f"today.json 갱신 완료: {date_str} {now_str} (알림 {len(due)}건 발송)")
 
 
 if __name__ == "__main__":
