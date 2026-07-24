@@ -167,7 +167,7 @@ const ICONS = {
   clock: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>',
   check: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="m8.5 12.5 2.5 2.5 5-5"/></svg>',
   book: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>',
-  warn: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L14.71 3.86a2 2 0 0 0-3.42 0Z"/></svg>',
+  holiday: '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M12 2.5c.35 0 .67.2.83.51l2.3 4.66 5.14.75a.93.93 0 0 1 .52 1.58l-3.72 3.63.88 5.12a.93.93 0 0 1-1.35.98L12 16.9l-4.6 2.42a.93.93 0 0 1-1.35-.98l.88-5.12-3.72-3.63a.93.93 0 0 1 .52-1.58l5.14-.75 2.3-4.66c.16-.31.48-.51.83-.51Z"/></svg>',
 };
 
 function el(tag, props = {}, children = []) {
@@ -226,7 +226,7 @@ function render(data) {
 
   if (data.holiday_names && data.holiday_names.length) {
     const banner = el("div", { className: "banner" });
-    banner.innerHTML = ICONS.warn;
+    banner.innerHTML = ICONS.holiday;
     banner.appendChild(el("span", { textContent: "오늘은 공휴일입니다: " + data.holiday_names.join(", ") }));
     app.appendChild(banner);
   }
