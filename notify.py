@@ -77,22 +77,25 @@ def get_time(page: dict, prop_name: str = "날짜") -> str:
     return ""
 
 
-def build_routine_lines(weekday: int) -> list:
+WEEKDAY_NAMES = ["월요일", "화요일", "수요일", "목요일", "금요일", "토요일", "일요일"]
+
+
+def build_routine_items(weekday: int) -> list:
     """weekday: 월=0 ... 일=6. 월/수/금은 운동, 그 외는 3차 작업으로 대체."""
-    slot_21_22 = "21~22 - 운동" if weekday in (0, 2, 4) else "21~22 - 3차 작업"
+    slot_21_22 = "운동" if weekday in (0, 2, 4) else "3차 작업"
     return [
-        "08시 - 기상",
-        "08~09 - 아침 식사",
-        "09~11 - 1차 집필",
-        "11~13 - 1차 작업",
-        "13~14 - 점심 식사",
-        "14~16 - 2차 집필",
-        "16~18 - 2차 작업",
-        "18~19 - 저녁 식사",
-        "19~21 - 3차 집필",
-        slot_21_22,
-        "22~00 - 휴식",
-        "취침 - 00:15 또는 01:45",
+        {"time": "08시", "text": "기상"},
+        {"time": "08~09", "text": "아침 식사"},
+        {"time": "09~11", "text": "1차 집필"},
+        {"time": "11~13", "text": "1차 작업"},
+        {"time": "13~14", "text": "점심 식사"},
+        {"time": "14~16", "text": "2차 집필"},
+        {"time": "16~18", "text": "2차 작업"},
+        {"time": "18~19", "text": "저녁 식사"},
+        {"time": "19~21", "text": "3차 집필"},
+        {"time": "21~22", "text": slot_21_22},
+        {"time": "22~00", "text": "휴식"},
+        {"time": "취침", "text": "00:15 또는 01:45"},
     ]
 
 
@@ -101,45 +104,40 @@ def build_today_data(date_str: str, weekday: int, schedule_pages: list, novel_pa
     schedule_only = [p for p in schedule_pages if get_select(p, "종류") == "일정"]
     todo_pages = [p for p in schedule_pages if get_select(p, "종류") in ("할일", "과제")]
 
-    holiday_banner = None
-    if holiday_pages:
-        names = ", ".join(get_title(p) for p in holiday_pages)
-        holiday_banner = f"오늘은 공휴일입니다: {names}"
+    holiday_names = [get_title(p) for p in holiday_pages]
 
     if schedule_only:
-        schedule_items = []
-        for p in schedule_only:
-            time_str = get_time(p)
-            title = get_title(p)
-            schedule_items.append(f"{time_str} {title}" if time_str else title)
+        schedule_items = [
+            {"time": get_time(p), "text": get_title(p)} for p in schedule_only
+        ]
+        is_routine = False
     else:
-        schedule_items = build_routine_lines(weekday)
+        schedule_items = build_routine_items(weekday)
+        is_routine = True
 
-    todo_items = []
-    for p in todo_pages:
-        kind = get_select(p, "종류")
-        time_str = get_time(p)
-        title = get_title(p)
-        prefix = f"[{kind}] {time_str}" if time_str else f"[{kind}]"
-        todo_items.append(f"{prefix} {title}")
+    todo_items = [
+        {"time": get_time(p), "tags": [get_select(p, "종류")], "text": get_title(p)}
+        for p in todo_pages
+    ]
 
-    novel_items = []
-    for p in novel_pages:
-        work = get_select(p, "작품")
-        kind = get_select(p, "유형")
-        time_str = get_time(p)
-        title = get_title(p)
-        body_text = f"{time_str} {title}" if time_str else title
-        novel_items.append(f"[{work}] {kind} - {body_text}")
+    novel_items = [
+        {
+            "time": get_time(p),
+            "tags": [get_select(p, "작품"), get_select(p, "유형")],
+            "text": get_title(p),
+        }
+        for p in novel_pages
+    ]
 
     return {
         "date": date_str,
-        "holiday_banner": holiday_banner,
+        "weekday": WEEKDAY_NAMES[weekday],
+        "holiday_names": holiday_names,
         "schedule_title": "오늘의 일정",
         "schedule_items": schedule_items,
+        "is_routine": is_routine,
         "todo_items": todo_items,
         "novel_items": novel_items,
-        "novel_empty_message": "오늘은 등록된 소설 일정이 없습니다.",
     }
 
 

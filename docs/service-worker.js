@@ -1,4 +1,4 @@
-const SHELL_CACHE = "schedule-shell-v1";
+const SHELL_CACHE = "schedule-shell-v2";
 const SHELL_FILES = ["./", "./index.html", "./manifest.json", "./icon-192.png", "./icon-512.png"];
 
 self.addEventListener("install", (event) => {
@@ -17,18 +17,18 @@ self.addEventListener("activate", (event) => {
   self.clients.claim();
 });
 
+// 네트워크 우선 + 캐시 폴백: 온라인이면 항상 최신 파일을 받고,
+// 오프라인일 때만 마지막으로 받아둔 캐시를 보여준다.
+// (캐시 우선 방식은 배포한 화면을 새로 고쳐도 예전 버전이 계속 보이는
+// 문제가 있어서 이 방식으로 바꿨다.)
 self.addEventListener("fetch", (event) => {
-  const url = new URL(event.request.url);
-
-  // today.json은 항상 최신 데이터를 받아야 하므로 네트워크 우선.
-  if (url.pathname.endsWith("today.json")) {
-    event.respondWith(
-      fetch(event.request).catch(() => caches.match(event.request))
-    );
-    return;
-  }
-
   event.respondWith(
-    caches.match(event.request).then((cached) => cached || fetch(event.request))
+    fetch(event.request)
+      .then((res) => {
+        const copy = res.clone();
+        caches.open(SHELL_CACHE).then((cache) => cache.put(event.request, copy));
+        return res;
+      })
+      .catch(() => caches.match(event.request))
   );
 });
