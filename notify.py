@@ -224,6 +224,11 @@ def send_push(title: str, message: str) -> None:
         json=payload,
     )
     resp.raise_for_status()
+    # OneSignal은 실패해도 HTTP 200을 주고 본문의 "errors"로만 실패를 알리는
+    # 경우가 있어서, 상태 코드만으로는 성공 여부를 알 수 없다.
+    body = resp.json()
+    if body.get("errors"):
+        raise RuntimeError(f"OneSignal 발송 실패: {body['errors']}")
 
 
 def write_today_json(data: dict) -> None:
@@ -247,13 +252,20 @@ def main():
     already_sent = set(previous.get("notified_at", [])) if previous.get("date") == date_str else set()
 
     due = collect_due_notifications(data, now_str, already_sent)
+    sent_count = 0
     for notify_time, texts in due:
-        send_push(f"{notify_time} 일정", " · ".join(texts))
-        already_sent.add(notify_time)
+        try:
+            send_push(f"{notify_time} 일정", " · ".join(texts))
+            already_sent.add(notify_time)
+            sent_count += 1
+        except Exception as e:
+            # 화면 갱신은 푸시 성공 여부와 무관하게 계속되어야 하므로 여기서 멈추지 않는다.
+            # 실패한 시각은 already_sent에 넣지 않아 다음 실행 때 다시 시도한다.
+            print(f"푸시 발송 실패 ({notify_time}): {e}")
 
     data["notified_at"] = sorted(already_sent)
     write_today_json(data)
-    print(f"today.json 갱신 완료: {date_str} {now_str} (알림 {len(due)}건 발송)")
+    print(f"today.json 갱신 완료: {date_str} {now_str} (알림 {sent_count}/{len(due)}건 발송)")
 
 
 if __name__ == "__main__":
