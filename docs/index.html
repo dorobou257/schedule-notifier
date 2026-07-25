@@ -14,7 +14,7 @@
     await OneSignal.init({
       appId: "9bf67400-2aa3-4c64-b5af-7a014ab0d6cd",
       serviceWorkerParam: { scope: "/schedule-notifier/" },
-      serviceWorkerPath: "/schedule-notifier/service-worker.js",
+      serviceWorkerPath: "service-worker.js",
     });
   });
 </script>
@@ -346,11 +346,8 @@ async function loadToday(isRefresh) {
 document.getElementById("refresh").addEventListener("click", () => loadToday(true));
 loadToday(false);
 
-if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => {
-    navigator.serviceWorker.register("./service-worker.js");
-  });
-}
+// 서비스워커 등록은 OneSignal SDK(init의 serviceWorkerPath/Param)가 전담한다.
+// 여기서 따로 register()를 또 부르면 등록 타이밍이 겹칠 수 있어서 뺐다.
 </script>
 </body>
 </html>
