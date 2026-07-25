@@ -229,6 +229,10 @@ def send_push(title: str, message: str) -> None:
     body = resp.json()
     if body.get("errors"):
         raise RuntimeError(f"OneSignal 발송 실패: {body['errors']}")
+    # "errors"가 없어도 대상 구독이 이미 끊겨 있으면 recipients가 0으로 와서
+    # API 호출 자체는 성공하지만 실제로는 아무한테도 전달되지 않는다.
+    if not body.get("recipients"):
+        raise RuntimeError(f"OneSignal 발송 실패: 수신자 0명 (구독 끊김 등, id={body.get('id')})")
 
 
 def write_today_json(data: dict) -> None:
