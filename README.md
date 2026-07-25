@@ -47,11 +47,16 @@
 1. https://onesignal.com 무료 가입 → **New App/Website** → 플랫폼 **Web Push** 선택
 2. 통합 방식 **Typical Site** 선택 후:
    - Site Name: 아무거나
-   - Site URL: `https://<사용자명>.github.io/<저장소명>/`
-   - Default Icon URL: `.../icon-192.png`
-3. 저장 후 **Settings → Keys & IDs**에서 **App ID** 확인, **API Keys → Add Key**로 발송 전용 키 발급
-4. `docs/index.html`의 `OneSignal.init({ appId: "..." })`에 App ID를 넣고, GitHub Secrets에 `ONESIGNAL_APP_ID`(App ID), `ONESIGNAL_REST_API_KEY`(방금 발급받은 키) 등록
-5. 휴대폰에서 앱을 열면(5번 단계) OneSignal이 자동으로 알림 권한을 물어봅니다 → **허용**해야 알림을 받을 수 있습니다
+   - Site URL: `https://<사용자명>.github.io/<저장소명>/` (**끝에 저장소 경로까지 정확히** — GitHub Pages는 도메인 루트가 아니라 `/저장소명/` 하위 경로에서 서비스되기 때문에 이걸 빠뜨리면 구독 자체가 조용히 실패합니다)
+3. 같은 화면 **5. Advanced Push Settings → Service Workers → "Customize service worker paths and filenames"**를 켜고 아래처럼 입력 (이것도 빠뜨리면 안 됨 — 서브디렉토리 호스팅에서는 필수):
+   - Path to service worker files: `/<저장소명>/`
+   - Main service worker filename: `service-worker.js`
+   - Updater service worker filename: `service-worker.js` (같은 파일로 지정해도 됨)
+   - Service worker registration scope: `/<저장소명>/`
+4. 저장 후 **Settings → Keys & IDs**에서 **App ID** 확인, **API Keys → Add Key**로 발송 전용 키 발급
+5. `docs/index.html`의 `OneSignal.init({ appId: "..." })`에 App ID를 넣고, GitHub Secrets에 `ONESIGNAL_APP_ID`(App ID), `ONESIGNAL_REST_API_KEY`(방금 발급받은 키) 등록
+6. 휴대폰에서 앱을 열면(5번 단계) OneSignal이 자동으로 알림 권한을 물어봅니다 → **허용**해야 알림을 받을 수 있습니다
+7. 구독이 잘 됐는지는 OneSignal 대시보드 **Audience → Subscriptions**에서 확인 (0명이면 3번 서브디렉토리 설정을 다시 확인)
 
 ### 7. daily-notify를 5분마다 깨우기 (외부 크론)
 `daily-notify.yml`에는 GitHub 자체 `schedule` 트리거를 빼뒀습니다. GitHub의 예약 실행은 지연/누락이 잦아서, 대신 무료 외부 크론 서비스가 GitHub API를 직접 호출해 깨우는 방식을 씁니다. (Public 저장소라 GitHub Actions 실행 시간은 무료·무제한입니다.)

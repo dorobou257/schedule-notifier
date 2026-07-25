@@ -210,7 +210,7 @@ def collect_due_notifications(data: dict, now_str: str, already_sent: set) -> li
 def send_push(title: str, message: str) -> None:
     payload = {
         "app_id": ONESIGNAL_APP_ID,
-        "included_segments": ["Subscribed Users"],
+        "included_segments": ["Active Subscriptions"],
         "headings": {"en": title},
         "contents": {"en": message},
         "url": APP_URL,
