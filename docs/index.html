@@ -11,11 +11,31 @@
 <script>
   window.OneSignalDeferred = window.OneSignalDeferred || [];
   OneSignalDeferred.push(async function (OneSignal) {
-    await OneSignal.init({
-      appId: "9bf67400-2aa3-4c64-b5af-7a014ab0d6cd",
-      serviceWorkerParam: { scope: "/schedule-notifier/" },
-      serviceWorkerPath: "service-worker.js",
-    });
+    function showDebug(extra) {
+      const el = document.getElementById("debug");
+      if (!el) return;
+      const lines = [
+        "permission(Notification): " + (typeof Notification !== "undefined" ? Notification.permission : "n/a"),
+        "permission(OneSignal): " + OneSignal.Notifications.permission,
+        "optedIn: " + OneSignal.User.PushSubscription.optedIn,
+        "subscription id: " + OneSignal.User.PushSubscription.id,
+        "onesignalId: " + OneSignal.User.onesignalId,
+        extra || "",
+      ];
+      el.textContent = lines.join("\n");
+    }
+    try {
+      await OneSignal.init({
+        appId: "9bf67400-2aa3-4c64-b5af-7a014ab0d6cd",
+        serviceWorkerParam: { scope: "/schedule-notifier/" },
+        serviceWorkerPath: "service-worker.js",
+      });
+      showDebug("init 완료");
+      OneSignal.User.PushSubscription.addEventListener("change", () => showDebug("change 이벤트 발생"));
+    } catch (e) {
+      const el = document.getElementById("debug");
+      if (el) el.textContent = "init 에러: " + (e && e.message ? e.message : String(e));
+    }
   });
 </script>
 <style>
@@ -204,6 +224,7 @@
     <p class="empty">불러오는 중…</p>
   </main>
   <div id="status"></div>
+  <pre id="debug" style="margin:16px; padding:12px; background:#00000010; border-radius:8px; font-size:11px; white-space:pre-wrap; word-break:break-all;">알림 상태 확인 중…</pre>
 </div>
 
 <script>
