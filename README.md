@@ -1,15 +1,15 @@
 # 일정 알리미
 
-노션의 [일정] / [소설] 캘린더를 매일 아침 8시에 확인해서, 폰에 설치한 앱(PWA)에 오늘 일정을 띄워주고, 오늘 할일/소설 일정을 요약해 ntfy.sh로 푸시 알림 한 번 보내는 자동화입니다. 이메일은 쓰지 않습니다.
+노션의 [일정] / [소설] 캘린더를 매일 기상 시간(평일 8시 / 주말 9시)에 확인해서, 폰에 설치한 앱(PWA)에 오늘 일정을 띄워주고, 오늘 할일/소설 일정을 요약해 ntfy.sh로 푸시 알림 한 번 보내는 자동화입니다. 이메일은 쓰지 않습니다.
 
 ## 폴더 구성
-- `notify.py` : 매일 아침 8시에 실행되어 노션을 읽고 `docs/today.json`을 갱신하며, 오늘 하루 요약을 ntfy.sh로 한 번 보내는 메인 스크립트
+- `notify.py` : 매일 기상 시간(평일 8시 / 주말 9시)에 실행되어 노션을 읽고 `docs/today.json`을 갱신하며, 오늘 하루 요약을 ntfy.sh로 한 번 보내는 메인 스크립트
 - `update_holidays.py` : 매년 초 1회, 파이썬 `holidays` 라이브러리로 대한민국 공휴일을 계산해 노션에 채워 넣는 스크립트 (별도 API 키 불필요)
 - `docs/` : GitHub Pages로 서비스되는 PWA(휴대폰에 설치하는 앱) 소스
   - `index.html` : `today.json`을 읽어서 화면에 보여주는 앱 본체 (푸시 알림은 이 PWA가 아니라 별도의 ntfy 앱이 수신함)
   - `manifest.json`, `service-worker.js`, `icon-*.png` : 홈 화면 설치 + 오프라인 캐싱을 위한 PWA 필수 파일
   - `today.json` : `notify.py`가 매일 아침 자동으로 덮어쓰는 "오늘 일정" 데이터 (오늘 알림을 이미 보냈는지 여부 포함)
-- `.github/workflows/daily-notify.yml` : 매일 아침 8시에 외부 크론이 깨우는 워크플로우 (화면 갱신 + 알림 발송 + Pages 배포)
+- `.github/workflows/daily-notify.yml` : 매일 기상 시간(평일 8시 / 주말 9시)에 외부 크론이 깨우는 워크플로우 (화면 갱신 + 알림 발송 + Pages 배포)
 - `.github/workflows/yearly-holidays.yml` : 매년 1월 초 실행 스케줄러
 
 ## 준비 단계
@@ -63,14 +63,16 @@ OneSignal과 달리 ntfy는 "수신자 0명"을 알려주지 않는 단순 발�
 검증할 수 없습니다. 알림이 하루 지나도 안 오면 5번처럼 `curl`로 직접 발행해보고
 휴대폰에 뜨는지부터 확인하세요.
 
-### 7. daily-notify를 매일 아침 8시에 깨우기 (외부 크론)
+### 7. daily-notify를 기상 시간에 깨우기 (외부 크론)
 `daily-notify.yml`에는 GitHub 자체 `schedule` 트리거를 빼뒀습니다. GitHub의 예약 실행은 지연/누락이 잦아서, 대신 무료 외부 크론 서비스가 GitHub API를 직접 호출해 깨우는 방식을 씁니다. (Public 저장소라 GitHub Actions 실행 시간은 무료·무제한입니다.)
+
+기상 시간이 평일 8시 / 주말 9시로 나뉘므로, cron-job.org에 **같은 내용의 크론잡을 2개** 만들어야 합니다 (URL·Method·Headers·Body는 완전히 동일하고 요일·시각만 다름).
 
 1. GitHub → 우측 상단 프로필 → **Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token**
    - Repository access: **Only select repositories** → `schedule-notifier`만 선택
    - Permissions → **Actions**: **Read and write**
    - 생성된 토큰(`github_pat_...`)을 복사해둡니다 (다시 볼 수 없으니 주의)
-2. https://cron-job.org 에서 무료 가입 후 **Create cronjob**
+2. https://cron-job.org 에서 무료 가입 후 **Create cronjob**을 두 번 반복:
    - URL: `https://api.github.com/repos/dorobou257/schedule-notifier/actions/workflows/daily-notify.yml/dispatches`
    - Request method: `POST`
    - Headers 추가:
@@ -78,13 +80,14 @@ OneSignal과 달리 ntfy는 "수신자 0명"을 알려주지 않는 단순 발�
      - `Accept: application/vnd.github+json`
      - `Content-Type: application/json`
    - Request body: `{"ref":"master"}`
-   - Schedule: **매일 08:00 1회**, `Asia/Seoul` 시간대
-3. 저장 후 cron-job.org에서 "Run now"로 한 번 테스트 → GitHub Actions 탭에 `daily-notify`가 `workflow_dispatch`로 즉시 실행되면 성공
+   - 크론잡 A(평일): Schedule **월~금 08:00**, `Asia/Seoul` 시간대
+   - 크론잡 B(주말): Schedule **토~일 09:00**, `Asia/Seoul` 시간대
+3. 저장 후 각 크론잡에서 "Run now"로 한 번씩 테스트 → GitHub Actions 탭에 `daily-notify`가 `workflow_dispatch`로 즉시 실행되면 성공
 
 ## 참고
 - 2026년 8~12월 공휴일 9건은 이미 노션에 수동으로 입력해뒀습니다. `update_holidays.py`는 2027년부터 자동으로 채워줍니다.
 - "종류" 속성이 "일정"이면 루틴 대신 그 일정이 표시되고, "할일" 또는 "과제"면 루틴(또는 일정)과 결합되어 표시됩니다.
-- 루틴 중 21~22시는 월/수/금엔 "운동", 화/목/토/일엔 "3차 작업"으로 자동 대체됩니다.
-- **알림은 하루에 한 번, 아침 8시에만 갑니다.** 화면(PWA)에 보이는 오늘 일정 전체를 실시간으로 계속 갱신하던 예전 방식(5분 간격)에서, 아침 한 번 요약 알림만 보내는 방식으로 바꿨습니다. 루틴 일정(기상/집필/작업/식사 등)은 매일 똑같아서 알림 내용에는 안 넣고, 그날그날 달라지는 공휴일·특별 일정·할일·소설 항목만 알림에 넣습니다.
-- 화면(PWA)도 같은 시점(아침 8시)에 한 번만 갱신됩니다. 그 이후 노션에 새로 추가한 항목은 다음날 8시 실행 전까지는 화면에 안 뜹니다.
+- 루틴은 평일(월~금, 집필 4블록)과 주말(토~일, 작업 2블록 + 구상)로 나뉩니다. 월/수/금 저녁엔 운동이 들어가고 화/목은 그만큼 작업 시간이 늘어나며, 금요일 밤과 일요일 밤은 다음날 기상 시각에 맞춰 취침 시각이 각각 늦춰지고/당겨집니다. 정확한 구성은 `notify.py`의 `build_routine_items` 참고.
+- **알림은 하루에 한 번, 기상 시간(평일 8시 / 주말 9시)에만 갑니다.** 화면(PWA)에 보이는 오늘 일정 전체를 실시간으로 계속 갱신하던 예전 방식(5분 간격)에서, 기상 시간에 한 번 요약 알림만 보내는 방식으로 바꿨습니다. 루틴 일정(기상/집필/작업/식사 등)은 매일 똑같아서 알림 내용에는 안 넣고, 그날그날 달라지는 공휴일·특별 일정·할일·소설 항목만 알림에 넣습니다.
+- 화면(PWA)도 같은 시점(기상 시간)에 한 번만 갱신됩니다. 그 이후 노션에 새로 추가한 항목은 다음날 실행 전까지는 화면에 안 뜹니다.
 - 이미 그날 알림을 보냈으면(`today.json`의 `notified` 값) 같은 날 다시 실행돼도 중복으로 안 보냅니다.

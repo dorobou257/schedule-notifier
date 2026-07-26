@@ -1,5 +1,5 @@
 """
-하루 한 번(아침 8시) 실행되어 노션의 [일정] / [소설] 캘린더를 확인하고
+하루 한 번(기상 시간: 평일 8시 / 주말 9시) 실행되어 노션의 [일정] / [소설] 캘린더를 확인하고
 docs/today.json으로 정리해서 저장하는 스크립트.
 GitHub Pages로 서비스되는 PWA(docs/index.html)가 이 파일을 읽어서 화면에 보여준다.
 
@@ -91,21 +91,54 @@ WEEKDAY_NAMES = ["월요일", "화요일", "수요일", "목요일", "금요일"
 
 
 def build_routine_items(weekday: int) -> list:
-    """weekday: 월=0 ... 일=6. 월/수/금은 운동, 그 외는 3차 작업으로 대체."""
-    slot_21_22 = "운동" if weekday in (0, 2, 4) else "3차 작업"
+    """weekday: 월=0 ... 일=6.
+
+    평일(월~금)은 집필 4블록, 주말(토~일)은 작업 2블록 + 구상으로 낮 일과가 갈린다.
+    저녁 이후엔 월/수/금만 운동이 들어가고 나머지 평일은 그만큼 작업 시간이 늘어난다.
+    금요일 밤은 다음날(토요일) 기상이 09시라 취침이 01:30으로 늦춰지고,
+    반대로 일요일 밤은 다음날(월요일) 기상이 08시라 취침이 00:30으로 당겨진다.
+    """
+    if weekday <= 4:  # 월~금: 평일
+        is_exercise_day = weekday in (0, 2, 4)
+        evening = (
+            [
+                {"time": "19~20", "text": "작업"},
+                {"time": "20~21", "text": "운동"},
+            ]
+            if is_exercise_day
+            else [{"time": "19~21", "text": "작업"}]
+        )
+        is_friday = weekday == 4
+        rest_time = "21~01:30" if is_friday else "21~24:30"
+        sleep_time = "01:30" if is_friday else "00:30"
+        return [
+            {"time": "08", "text": "기상"},
+            {"time": "08~09", "text": "아침 식사"},
+            {"time": "09~11", "text": "1차 집필"},
+            {"time": "11~13", "text": "2차 집필"},
+            {"time": "13~14", "text": "점심 식사"},
+            {"time": "14~16", "text": "3차 집필"},
+            {"time": "16~18", "text": "4차 집필"},
+            {"time": "18~19", "text": "저녁 식사"},
+            *evening,
+            {"time": rest_time, "text": "휴식"},
+            {"time": sleep_time, "text": "취침"},
+        ]
+
+    # 토, 일: 주말
+    is_sunday = weekday == 6
+    rest_time = "22~00:30" if is_sunday else "22~01:30"
+    sleep_time = "00:30" if is_sunday else "01:30"
     return [
-        {"time": "08시", "text": "기상"},
-        {"time": "08~09", "text": "아침 식사"},
-        {"time": "09~11", "text": "1차 집필"},
-        {"time": "11~13", "text": "1차 작업"},
-        {"time": "13~14", "text": "점심 식사"},
-        {"time": "14~16", "text": "2차 집필"},
-        {"time": "16~18", "text": "2차 작업"},
-        {"time": "18~19", "text": "저녁 식사"},
-        {"time": "19~21", "text": "3차 집필"},
-        {"time": "21~22", "text": slot_21_22},
-        {"time": "22~00", "text": "휴식"},
-        {"time": "취침", "text": "00:15 또는 01:45"},
+        {"time": "09", "text": "기상"},
+        {"time": "09~10", "text": "아침 식사"},
+        {"time": "10~14", "text": "1차 작업"},
+        {"time": "14~15", "text": "점심 식사"},
+        {"time": "15~19", "text": "2차 작업"},
+        {"time": "19~20", "text": "저녁 식사"},
+        {"time": "20~22", "text": "구상"},
+        {"time": rest_time, "text": "휴식"},
+        {"time": sleep_time, "text": "취침"},
     ]
 
 
