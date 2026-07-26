@@ -1,18 +1,18 @@
 """
-5분 간격으로 실행되어 노션의 [일정] / [소설] 캘린더를 확인하고
+하루 한 번(아침 8시) 실행되어 노션의 [일정] / [소설] 캘린더를 확인하고
 docs/today.json으로 정리해서 저장하는 스크립트.
 GitHub Pages로 서비스되는 PWA(docs/index.html)가 이 파일을 읽어서 화면에 보여준다.
 
-동시에, 지금 막 시작하는 항목(식사 제외)이 있으면 OneSignal로 푸시 알림을
-보낸다. 같은 시각에 겹치는 항목은 하나로 합쳐서 보내고, 이미 보낸 시각은
-today.json에 기록해 다시 보내지 않는다.
+동시에 오늘 하루치 일정/할일/소설 목록을 하나로 요약해서 ntfy.sh로 푸시
+알림을 한 번 보낸다. 같은 날 스크립트가 다시 실행돼도(수동 재실행 등)
+이미 보냈으면 today.json에 기록된 걸 보고 중복 발송하지 않는다.
 
 필요한 환경변수(GitHub Actions Secrets로 설정):
-- NOTION_TOKEN          : 노션 Integration 토큰
-- SCHEDULE_DB_ID        : [일정] 데이터베이스 ID
-- NOVEL_DB_ID           : [소설] 데이터베이스 ID
-- ONESIGNAL_APP_ID      : OneSignal 앱 ID
-- ONESIGNAL_REST_API_KEY: OneSignal REST API 키
+- NOTION_TOKEN   : 노션 Integration 토큰
+- SCHEDULE_DB_ID : [일정] 데이터베이스 ID
+- NOVEL_DB_ID    : [소설] 데이터베이스 ID
+- NTFY_TOPIC     : ntfy.sh 구독 토픽 이름 (추측 불가능한 랜덤 문자열이어야 함 —
+                    ntfy.sh는 공개 서버라 토픽 이름만 알면 누구나 구독/발행 가능)
 """
 
 import json
@@ -25,8 +25,7 @@ import requests
 NOTION_TOKEN = os.environ["NOTION_TOKEN"]
 SCHEDULE_DB_ID = os.environ["SCHEDULE_DB_ID"]
 NOVEL_DB_ID = os.environ["NOVEL_DB_ID"]
-ONESIGNAL_APP_ID = os.environ["ONESIGNAL_APP_ID"]
-ONESIGNAL_REST_API_KEY = os.environ["ONESIGNAL_REST_API_KEY"]
+NTFY_TOPIC = os.environ["NTFY_TOPIC"]
 
 NOTION_API = "https://api.notion.com/v1"
 HEADERS = {
@@ -35,24 +34,11 @@ HEADERS = {
     "Content-Type": "application/json",
 }
 
-ONESIGNAL_API = "https://onesignal.com/api/v1/notifications"
+NTFY_API = "https://ntfy.sh/"
 APP_URL = "https://dorobou257.github.io/schedule-notifier/"
 
 KST = timezone(timedelta(hours=9))
 TODAY_JSON_PATH = Path(__file__).parent / "docs" / "today.json"
-
-# 고정 루틴 항목의 실제 알림 시각. 식사와 취침은 여기 없으므로 알림이 안 간다.
-ROUTINE_NOTIFY_TIMES = {
-    "기상": "08:00",
-    "1차 집필": "09:00",
-    "1차 작업": "11:00",
-    "2차 집필": "14:00",
-    "2차 작업": "16:00",
-    "3차 집필": "19:00",
-    "운동": "21:00",
-    "3차 작업": "21:00",
-    "휴식": "22:00",
-}
 
 
 def today_kst() -> datetime:
@@ -174,65 +160,48 @@ def load_previous_data() -> dict:
         return {}
 
 
-def collect_due_notifications(data: dict, now_str: str, already_sent: set) -> list:
-    """(알림시각, [내용, ...]) 목록을 시간순으로 반환한다.
-    now_str(HH:MM) 시각이 이미 지났고, 아직 안 보낸 시각만 대상으로 한다."""
-    by_time: dict[str, list[str]] = {}
+def format_digest(data: dict) -> tuple[str, str]:
+    """오늘 하루치 데이터를 알림 제목/본문 한 쌍으로 요약한다.
+    루틴 일정(is_routine)은 매일 똑같아서 알림에는 안 넣고, 그날그날 달라지는
+    공휴일/특별 일정/할일/소설 항목만 넣는다."""
+    title = f"{data['date']} ({data['weekday']}) 오늘 일정"
 
-    for item in data.get("schedule_items", []):
-        if data.get("is_routine"):
-            t = ROUTINE_NOTIFY_TIMES.get(item["text"])
-        else:
-            t = item.get("time") or None
-        if t:
-            by_time.setdefault(t, []).append(item["text"])
+    lines = []
+    if data.get("holiday_names"):
+        lines.append("공휴일: " + ", ".join(data["holiday_names"]))
+
+    if not data.get("is_routine"):
+        for item in data.get("schedule_items", []):
+            t = (item.get("time") or "").strip()
+            lines.append(f"{t} {item['text']}".strip())
 
     for item in data.get("todo_items", []):
-        t = item.get("time") or None
-        if t:
-            tag = item["tags"][0] if item.get("tags") else ""
-            by_time.setdefault(t, []).append(f"[{tag}] {item['text']}")
+        tag = item["tags"][0] if item.get("tags") else ""
+        prefix = f"[{tag}] " if tag else ""
+        lines.append(f"할일 · {prefix}{item['text']}")
 
     for item in data.get("novel_items", []):
-        t = item.get("time") or None
-        if t:
-            label = " ".join(tag for tag in (item.get("tags") or []) if tag)
-            by_time.setdefault(t, []).append(f"[{label}] {item['text']}" if label else item["text"])
+        label = " ".join(tag for tag in (item.get("tags") or []) if tag)
+        prefix = f"[{label}] " if label else ""
+        lines.append(f"소설 · {prefix}{item['text']}")
 
-    due = [
-        (t, texts) for t, texts in by_time.items()
-        if t <= now_str and t not in already_sent
-    ]
-    due.sort(key=lambda pair: pair[0])
-    return due
+    message = "\n".join(lines) if lines else "오늘은 등록된 할일/소설 일정이 없습니다."
+    return title, message
 
 
 def send_push(title: str, message: str) -> None:
-    payload = {
-        "app_id": ONESIGNAL_APP_ID,
-        "included_segments": ["Active Subscriptions"],
-        "headings": {"en": title},
-        "contents": {"en": message},
-        "url": APP_URL,
-    }
+    # ntfy.sh는 구독자 수를 알려주지 않는 단순 발행-구독 방식이라, 여기서
+    # HTTP 상태만 확인할 뿐 실제 수신 여부(구독 앱이 켜져 있는지 등)는 알 수 없다.
     resp = requests.post(
-        ONESIGNAL_API,
-        headers={
-            "Authorization": f"Key {ONESIGNAL_REST_API_KEY}",
-            "Content-Type": "application/json",
+        NTFY_API,
+        json={
+            "topic": NTFY_TOPIC,
+            "title": title,
+            "message": message,
+            "click": APP_URL,
         },
-        json=payload,
     )
     resp.raise_for_status()
-    # OneSignal은 실패해도 HTTP 200을 주고 본문의 "errors"로만 실패를 알리는
-    # 경우가 있어서, 상태 코드만으로는 성공 여부를 알 수 없다.
-    body = resp.json()
-    if body.get("errors"):
-        raise RuntimeError(f"OneSignal 발송 실패: {body['errors']}")
-    # "errors"가 없어도 대상 구독이 이미 끊겨 있으면 recipients가 0으로 와서
-    # API 호출 자체는 성공하지만 실제로는 아무한테도 전달되지 않는다.
-    if not body.get("recipients"):
-        raise RuntimeError(f"OneSignal 발송 실패: 수신자 0명 (구독 끊김 등, id={body.get('id')})")
 
 
 def write_today_json(data: dict) -> None:
@@ -244,7 +213,6 @@ def write_today_json(data: dict) -> None:
 def main():
     now = today_kst()
     date_str = now.strftime("%Y-%m-%d")
-    now_str = now.strftime("%H:%M")
     weekday = now.weekday()  # 월=0 ... 일=6
 
     schedule_pages = query_database(SCHEDULE_DB_ID, date_str)
@@ -253,23 +221,24 @@ def main():
     data = build_today_data(date_str, weekday, schedule_pages, novel_pages)
 
     previous = load_previous_data()
-    already_sent = set(previous.get("notified_at", [])) if previous.get("date") == date_str else set()
+    already_notified = previous.get("date") == date_str and previous.get("notified", False)
 
-    due = collect_due_notifications(data, now_str, already_sent)
-    sent_count = 0
-    for notify_time, texts in due:
+    if already_notified:
+        data["notified"] = True
+        print(f"{date_str} 알림은 이미 보냈으므로 건너뜁니다.")
+    else:
+        title, message = format_digest(data)
         try:
-            send_push(f"{notify_time} 일정", " · ".join(texts))
-            already_sent.add(notify_time)
-            sent_count += 1
+            send_push(title, message)
+            data["notified"] = True
+            print("알림 발송 완료")
         except Exception as e:
             # 화면 갱신은 푸시 성공 여부와 무관하게 계속되어야 하므로 여기서 멈추지 않는다.
-            # 실패한 시각은 already_sent에 넣지 않아 다음 실행 때 다시 시도한다.
-            print(f"푸시 발송 실패 ({notify_time}): {e}")
+            data["notified"] = False
+            print(f"푸시 발송 실패: {e}")
 
-    data["notified_at"] = sorted(already_sent)
     write_today_json(data)
-    print(f"today.json 갱신 완료: {date_str} {now_str} (알림 {sent_count}/{len(due)}건 발송)")
+    print(f"today.json 갱신 완료: {date_str}")
 
 
 if __name__ == "__main__":

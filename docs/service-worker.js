@@ -1,9 +1,4 @@
-// OneSignal의 푸시 알림 처리 코드를 이 서비스워커에 얹는다.
-// (서비스워커는 스코프당 하나만 두는 게 안전해서, 별도 OneSignalSDKWorker.js를
-// 두는 대신 우리 서비스워커에 합쳤다.)
-importScripts("https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.sw.js");
-
-const SHELL_CACHE = "schedule-shell-v2";
+const SHELL_CACHE = "schedule-shell-v3";
 const SHELL_FILES = ["./", "./index.html", "./manifest.json", "./icon-192.png", "./icon-512.png"];
 
 self.addEventListener("install", (event) => {
