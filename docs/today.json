@@ -1,6 +1,6 @@
 {
-  "date": "2026-07-29",
-  "weekday": "수요일",
+  "date": "2026-07-30",
+  "weekday": "목요일",
   "holiday_names": [],
   "schedule_title": "오늘의 일정",
   "schedule_items": [
@@ -37,12 +37,8 @@
       "text": "저녁 식사"
     },
     {
-      "time": "19~20",
+      "time": "19~21",
       "text": "작업"
-    },
-    {
-      "time": "20~21",
-      "text": "운동"
     },
     {
       "time": "21~24:30",
@@ -54,34 +50,25 @@
     }
   ],
   "is_routine": true,
-  "todo_items": [],
-  "novel_items": [
+  "todo_items": [
     {
-      "time": "14:00",
+      "time": "",
       "tags": [
-        "챌린지",
-        "초고"
+        "할일"
       ],
-      "text": "45화"
-    },
-    {
-      "time": "16:00",
-      "tags": [
-        "챌린지",
-        "초고"
-      ],
-      "text": "46화"
+      "text": "기숙사 서류제출"
     },
     {
       "time": "09:00",
       "tags": [
-        "챌린지",
-        "초고"
+        "할일"
       ],
-      "text": "43화"
-    },
+      "text": "결핵 검사"
+    }
+  ],
+  "novel_items": [
     {
-      "time": "11:00",
+      "time": "",
       "tags": [
         "챌린지",
         "초고"
@@ -94,7 +81,7 @@
         "챌린지",
         "연재"
       ],
-      "text": "43화"
+      "text": "44화"
     }
   ],
   "notified": true
