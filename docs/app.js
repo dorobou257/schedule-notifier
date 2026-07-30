@@ -492,7 +492,7 @@ function renderSleepBar() {
     btn.style.alignItems = "center";
     btn.style.justifyContent = "center";
     btn.style.gap = "8px";
-    btn.addEventListener("click", onSleepButtonTap);
+    btn.addEventListener("click", openBedTimeSheet);
     inner.appendChild(btn);
     bar.appendChild(inner);
     document.body.appendChild(bar);
@@ -503,14 +503,47 @@ function renderSleepBar() {
   btn.querySelector("span").textContent = isTonight ? "취침 기록됨 · 다시 기록" : "취침";
 }
 
-function onSleepButtonTap() {
-  store.today.bedAt = new Date().toISOString();
-  store.today.wakeOverride = null;
-  store.today.accepted = false;
-  store.today.protectedOverrides = [];
-  saveStore(true);
-  state.proposalDismissed = false;
-  renderShell();
+/**
+ * "HH:MM" 입력값을 지금(now)에서 가장 가까운 실제 시각으로 되돌린다.
+ * 자정을 걸치는 입력(예: 23:58에 버튼을 눌렀는데 "00:10"을 입력)을 오늘 날짜의
+ * 과거 시각으로 잘못 해석하지 않도록, 12시간 넘게 차이 나면 하루를 앞/뒤로
+ * 밀어 "지금과 가장 가까운 그 시각"으로 취급한다.
+ */
+function nearestTimeToNow(hh, mm, now) {
+  const d = new Date(now);
+  d.setHours(hh, mm, 0, 0);
+  const diffHours = (d - now) / 3600000;
+  if (diffHours > 12) d.setDate(d.getDate() - 1);
+  else if (diffHours < -12) d.setDate(d.getDate() + 1);
+  return d;
+}
+
+function openBedTimeSheet() {
+  state.activeSheet = "bedtime";
+  const now = new Date();
+  const input = el("input", { type: "time" });
+  input.value = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+  const field = el("div", { className: "field-row" });
+  field.appendChild(el("label", { textContent: "취침 시각" }));
+  field.appendChild(input);
+
+  const applyBtn = el("button", { className: "btn btn--primary", textContent: "확인" });
+  applyBtn.addEventListener("click", () => {
+    if (!input.value) return;
+    const [h, m] = input.value.split(":").map(Number);
+    store.today.bedAt = nearestTimeToNow(h, m, new Date()).toISOString();
+    store.today.wakeOverride = null;
+    store.today.accepted = false;
+    store.today.protectedOverrides = [];
+    saveStore(true);
+    state.proposalDismissed = false;
+    closeSheet();
+    renderShell();
+  });
+  const cancelBtn = el("button", { className: "btn btn--ghost", textContent: "취소" });
+  cancelBtn.addEventListener("click", closeSheet);
+
+  openSheet("취침 기록", "잠들 시각을 확인하거나 바꾸세요. 수면 목표 시간만큼 더해 내일 기상 시각을 예상합니다.", [field], [cancelBtn, applyBtn]);
 }
 
 // ---------------------------------------------------------------
@@ -562,9 +595,7 @@ function openWakeTimeSheet() {
   applyBtn.addEventListener("click", () => {
     if (!input.value) return;
     const [h, m] = input.value.split(":").map(Number);
-    const d = new Date();
-    d.setHours(h, m, 0, 0);
-    store.today.wakeOverride = d.toISOString();
+    store.today.wakeOverride = nearestTimeToNow(h, m, new Date()).toISOString();
     saveStore(true);
     state.proposalDismissed = false;
     closeSheet();
