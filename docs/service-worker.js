@@ -1,5 +1,15 @@
-const SHELL_CACHE = "schedule-shell-v3";
-const SHELL_FILES = ["./", "./index.html", "./manifest.json", "./icon-192.png", "./icon-512.png"];
+const SHELL_CACHE = "schedule-shell-v4";
+const SHELL_FILES = [
+  "./",
+  "./index.html",
+  "./styles.css",
+  "./routine.js",
+  "./app.js",
+  "./manifest.json",
+  "./icon-192.png",
+  "./icon-512.png",
+  "./icon-512-maskable.png",
+];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(

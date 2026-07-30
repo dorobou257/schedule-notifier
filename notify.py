@@ -3,7 +3,12 @@
 docs/today.json으로 정리해서 저장하는 스크립트.
 GitHub Pages로 서비스되는 PWA(docs/index.html)가 이 파일을 읽어서 화면에 보여준다.
 
-동시에 오늘 하루치 일정/할일/소설 목록을 하나로 요약해서 ntfy.sh로 푸시
+이 스크립트는 "루틴"(기상/식사/집필 등 매일 반복되는 하루 일과)을 더 이상
+만들지 않는다 — 루틴은 실제 취침 시각에 맞춰 매번 달라져야 하므로 브라우저의
+docs/routine.js가 그때그때 계산한다. 여기서는 노션에만 있는, 그날그날 다른
+데이터(공휴일/특별 일정/할일/소설 일정)만 today.json에 담는다.
+
+동시에 오늘 하루치 특별 일정/할일/소설 목록을 하나로 요약해서 ntfy.sh로 푸시
 알림을 한 번 보낸다. 같은 날 스크립트가 다시 실행돼도(수동 재실행 등)
 이미 보냈으면 today.json에 기록된 걸 보고 중복 발송하지 않는다.
 
@@ -90,73 +95,18 @@ def get_time(page: dict, prop_name: str = "날짜") -> str:
 WEEKDAY_NAMES = ["월요일", "화요일", "수요일", "목요일", "금요일", "토요일", "일요일"]
 
 
-def build_routine_items(weekday: int) -> list:
-    """weekday: 월=0 ... 일=6.
-
-    평일(월~금)은 집필 4블록, 주말(토~일)은 작업 2블록 + 구상으로 낮 일과가 갈린다.
-    저녁 이후엔 월/수/금만 운동이 들어가고 나머지 평일은 그만큼 작업 시간이 늘어난다.
-    금요일 밤은 다음날(토요일) 기상이 09시라 취침이 01:30으로 늦춰지고,
-    반대로 일요일 밤은 다음날(월요일) 기상이 08시라 취침이 00:30으로 당겨진다.
-    """
-    if weekday <= 4:  # 월~금: 평일
-        is_exercise_day = weekday in (0, 2, 4)
-        evening = (
-            [
-                {"time": "19~20", "text": "작업"},
-                {"time": "20~21", "text": "운동"},
-            ]
-            if is_exercise_day
-            else [{"time": "19~21", "text": "작업"}]
-        )
-        is_friday = weekday == 4
-        rest_time = "21~01:30" if is_friday else "21~24:30"
-        sleep_time = "01:30" if is_friday else "00:30"
-        return [
-            {"time": "08", "text": "기상"},
-            {"time": "08~09", "text": "아침 식사"},
-            {"time": "09~11", "text": "1차 집필"},
-            {"time": "11~13", "text": "2차 집필"},
-            {"time": "13~14", "text": "점심 식사"},
-            {"time": "14~16", "text": "3차 집필"},
-            {"time": "16~18", "text": "4차 집필"},
-            {"time": "18~19", "text": "저녁 식사"},
-            *evening,
-            {"time": rest_time, "text": "휴식"},
-            {"time": sleep_time, "text": "취침"},
-        ]
-
-    # 토, 일: 주말
-    is_sunday = weekday == 6
-    rest_time = "22~00:30" if is_sunday else "22~01:30"
-    sleep_time = "00:30" if is_sunday else "01:30"
-    return [
-        {"time": "09", "text": "기상"},
-        {"time": "09~10", "text": "아침 식사"},
-        {"time": "10~14", "text": "1차 작업"},
-        {"time": "14~15", "text": "점심 식사"},
-        {"time": "15~19", "text": "2차 작업"},
-        {"time": "19~20", "text": "저녁 식사"},
-        {"time": "20~22", "text": "구상"},
-        {"time": rest_time, "text": "휴식"},
-        {"time": sleep_time, "text": "취침"},
-    ]
-
-
 def build_today_data(date_str: str, weekday: int, schedule_pages: list, novel_pages: list) -> dict:
     holiday_pages = [p for p in schedule_pages if get_checkbox(p, "공휴일")]
-    schedule_only = [p for p in schedule_pages if get_select(p, "종류") == "일정"]
+    special_pages = [p for p in schedule_pages if get_select(p, "종류") == "일정"]
     todo_pages = [p for p in schedule_pages if get_select(p, "종류") in ("할일", "과제")]
 
     holiday_names = [get_title(p) for p in holiday_pages]
 
-    if schedule_only:
-        schedule_items = [
-            {"time": get_time(p), "text": get_title(p)} for p in schedule_only
-        ]
-        is_routine = False
-    else:
-        schedule_items = build_routine_items(weekday)
-        is_routine = True
+    # 종류="일정"으로 노션에 직접 등록된 항목이 있으면 그날은 앱의 자동 루틴
+    # 대신 이 목록을 그대로 보여준다(비어 있으면 프론트가 routine.js로 계산).
+    special_items = [
+        {"time": get_time(p), "text": get_title(p)} for p in special_pages
+    ]
 
     todo_items = [
         {"time": get_time(p), "tags": [get_select(p, "종류")], "text": get_title(p)}
@@ -176,9 +126,7 @@ def build_today_data(date_str: str, weekday: int, schedule_pages: list, novel_pa
         "date": date_str,
         "weekday": WEEKDAY_NAMES[weekday],
         "holiday_names": holiday_names,
-        "schedule_title": "오늘의 일정",
-        "schedule_items": schedule_items,
-        "is_routine": is_routine,
+        "special_items": special_items,
         "todo_items": todo_items,
         "novel_items": novel_items,
     }
@@ -195,18 +143,17 @@ def load_previous_data() -> dict:
 
 def format_digest(data: dict) -> tuple[str, str]:
     """오늘 하루치 데이터를 알림 제목/본문 한 쌍으로 요약한다.
-    루틴 일정(is_routine)은 매일 똑같아서 알림에는 안 넣고, 그날그날 달라지는
-    공휴일/특별 일정/할일/소설 항목만 넣는다."""
+    매일 반복되는 루틴은 애초에 이 데이터에 들어있지 않다(브라우저가 그때그때
+    계산) — 그날그날 달라지는 공휴일/특별 일정/할일/소설 항목만 넣는다."""
     title = f"{data['date']} ({data['weekday']}) 오늘 일정"
 
     lines = []
     if data.get("holiday_names"):
         lines.append("공휴일: " + ", ".join(data["holiday_names"]))
 
-    if not data.get("is_routine"):
-        for item in data.get("schedule_items", []):
-            t = (item.get("time") or "").strip()
-            lines.append(f"{t} {item['text']}".strip())
+    for item in data.get("special_items", []):
+        t = (item.get("time") or "").strip()
+        lines.append(f"{t} {item['text']}".strip())
 
     for item in data.get("todo_items", []):
         tag = item["tags"][0] if item.get("tags") else ""

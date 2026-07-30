@@ -1,0 +1,1095 @@
+// 상태·렌더링·상호작용. routine.js의 순수 계산 결과를 화면에 붙이는 역할만
+// 한다 — 스케줄 계산 로직은 여기 두지 않는다(테스트 가능하게 분리 유지).
+import {
+  BASE_BLOCKS,
+  DEFAULT_SETTINGS,
+  computeSchedule,
+  computeWakeMinutes,
+  hhmmToBoundaryMinutes,
+  boundaryMinutesToHHMM,
+  dateToBoundaryMinutes,
+  logicalWeekday,
+  logicalDateKey,
+} from "./routine.js";
+
+const STORAGE_KEY = "schedule.v1";
+const WEEKDAY_NAMES = ["월요일", "화요일", "수요일", "목요일", "금요일", "토요일", "일요일"];
+
+// 블록 category(한글) → CSS data-cat 키(5색). 노션 태그도 같은 5색을 공유한다.
+const ROUTINE_CAT = { "집필": "write", "작업": "work", "운동": "exercise", "여유": "rest", "식사": "rest", "기타": "other" };
+const TODO_CAT = { "할일": "work", "과제": "write" };
+const NOVEL_STAGE_CAT = { "설정": "other", "시놉시스": "work", "트리트먼트": "work", "초고": "write", "퇴고": "rest", "연재": "exercise" };
+
+const ICONS = {
+  clock: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>',
+  check: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="m8.5 12.5 2.5 2.5 5-5"/></svg>',
+  book: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>',
+  holiday: '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M12 2.5c.35 0 .67.2.83.51l2.3 4.66 5.14.75a.93.93 0 0 1 .52 1.58l-3.72 3.63.88 5.12a.93.93 0 0 1-1.35.98L12 16.9l-4.6 2.42a.93.93 0 0 1-1.35-.98l.88-5.12-3.72-3.63a.93.93 0 0 1 .52-1.58l5.14-.75 2.3-4.66c.16-.31.48-.51.83-.51Z"/></svg>',
+  refresh: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36" /><path d="M21 3v6h-6" /></svg>',
+  gear: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.05.05a2.06 2.06 0 1 1-2.92 2.92l-.05-.05a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2.06 2.06 0 1 1-4.13 0v-.08A1.7 1.7 0 0 0 8.7 19.4a1.7 1.7 0 0 0-1.87.34l-.05.05a2.06 2.06 0 1 1-2.92-2.92l.05-.05a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H2.6a2.06 2.06 0 1 1 0-4.13h.08A1.7 1.7 0 0 0 4.3 8.7a1.7 1.7 0 0 0-.34-1.87l-.05-.05A2.06 2.06 0 1 1 6.83 3.9l.05.05a1.7 1.7 0 0 0 1.87.34H8.9a1.7 1.7 0 0 0 1-1.55V2.6a2.06 2.06 0 1 1 4.13 0v.08a1.7 1.7 0 0 0 1 1.55 1.7 1.7 0 0 0 1.87-.34l.05-.05a2.06 2.06 0 1 1 2.92 2.92l-.05.05a1.7 1.7 0 0 0-.34 1.87v.15a1.7 1.7 0 0 0 1.55 1H21.4a2.06 2.06 0 1 1 0 4.13h-.08a1.7 1.7 0 0 0-1.55 1z"/></svg>',
+  grip: '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="8" cy="6" r="1.6"/><circle cx="16" cy="6" r="1.6"/><circle cx="8" cy="12" r="1.6"/><circle cx="16" cy="12" r="1.6"/><circle cx="8" cy="18" r="1.6"/><circle cx="16" cy="18" r="1.6"/></svg>',
+  chevron: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>',
+  plus: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>',
+  trash: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3m-8 0 1 13h10l1-13"/></svg>',
+  close: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6 6 18"/></svg>',
+  moon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z"/></svg>',
+};
+
+function el(tag, props = {}, children = []) {
+  const node = document.createElement(tag);
+  const { dataset, ...rest } = props;
+  Object.assign(node, rest);
+  if (dataset) Object.assign(node.dataset, dataset);
+  children.forEach((c) => node.appendChild(c));
+  return node;
+}
+
+function formatDuration(mins) {
+  const m = Math.round(mins);
+  const h = Math.floor(m / 60);
+  const rest = m % 60;
+  if (h && rest) return `${h}시간 ${rest}분`;
+  if (h) return `${h}시간`;
+  return `${rest}분`;
+}
+
+// ---------------------------------------------------------------
+// 저장소 — localStorage 단일 키. 쓰기는 디바운스, 확정 동작(적용/되돌리기
+// 등)은 즉시 쓴다.
+// ---------------------------------------------------------------
+
+function emptyToday(dateKey) {
+  return { date: dateKey || null, bedAt: null, wakeOverride: null, protectedOverrides: [], accepted: false };
+}
+
+function defaultStore() {
+  return {
+    version: 1,
+    settings: { ...DEFAULT_SETTINGS },
+    blocks: BASE_BLOCKS.map((b) => ({ ...b })),
+    presets: {},
+    today: emptyToday(null),
+  };
+}
+
+function migrate(parsed) {
+  const base = defaultStore();
+  return {
+    version: 1,
+    settings: { ...base.settings, ...(parsed.settings || {}) },
+    blocks: Array.isArray(parsed.blocks) && parsed.blocks.length ? parsed.blocks : base.blocks,
+    presets: parsed.presets && typeof parsed.presets === "object" ? parsed.presets : {},
+    today: parsed.today && typeof parsed.today === "object" ? { ...emptyToday(null), ...parsed.today } : base.today,
+  };
+}
+
+function loadStore() {
+  let raw = null;
+  try {
+    raw = localStorage.getItem(STORAGE_KEY);
+  } catch {
+    raw = null;
+  }
+  if (!raw) return defaultStore();
+  try {
+    return migrate(JSON.parse(raw));
+  } catch {
+    return defaultStore();
+  }
+}
+
+let saveTimer = null;
+function saveStore(immediate) {
+  const write = () => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
+    } catch {
+      /* localStorage 접근 불가(사생활 보호 모드 등) — 조용히 무시, 세션 동안은 메모리 상태로 계속 동작 */
+    }
+  };
+  clearTimeout(saveTimer);
+  if (immediate) {
+    write();
+  } else {
+    saveTimer = setTimeout(write, 400);
+  }
+}
+
+let store = loadStore();
+
+function rolloverIfNewDay(now) {
+  const key = logicalDateKey(now, store.settings.dayBoundaryHour);
+  if (store.today.date !== key) {
+    store.today = emptyToday(key);
+    saveStore(true);
+    state.proposalDismissed = false;
+  }
+}
+
+// ---------------------------------------------------------------
+// 스케줄 계산 — routine.js 호출부. 제안 시트에서 토글할 때도 이 함수를
+// 그대로 재사용해 실시간으로 다시 계산한다.
+// ---------------------------------------------------------------
+
+function getWakeMinutes(dayBoundaryHour) {
+  const baseWakeMinutes = hhmmToBoundaryMinutes(store.settings.baseWake, dayBoundaryHour);
+  const bedAtMinutes = store.today.bedAt ? dateToBoundaryMinutes(new Date(store.today.bedAt), dayBoundaryHour) : null;
+  const wakeOverrideMinutes = store.today.wakeOverride
+    ? dateToBoundaryMinutes(new Date(store.today.wakeOverride), dayBoundaryHour)
+    : null;
+  return computeWakeMinutes({
+    bedAtMinutes,
+    wakeOverrideMinutes,
+    sleepTargetMinutes: store.settings.sleepTargetMinutes,
+    baseWakeMinutes,
+  });
+}
+
+/** protectedIds: 제안 시트에서 사용자가 체크 해제해 "오늘은 지키자"고 정한 블록 id 집합.
+ * 커밋된 값은 store.today.protectedOverrides, 시트 안에서 토글하는 동안은 임시 값을 넘긴다. */
+function computeForToday(now, protectedIds) {
+  const dayBoundaryHour = store.settings.dayBoundaryHour;
+  const weekday = logicalWeekday(now, dayBoundaryHour);
+  const wakeMinutes = getWakeMinutes(dayBoundaryHour);
+  const overrides = protectedIds || new Set(store.today.protectedOverrides || []);
+  const blocks = store.blocks.map((b) => (overrides.has(b.id) ? { ...b, protected: true } : b));
+  const settings = {
+    ...store.settings,
+    dropBreakfastWhenLate: overrides.has("breakfast") ? false : store.settings.dropBreakfastWhenLate,
+  };
+  return { result: computeSchedule({ blocks, settings, weekday, wakeMinutes }), wakeMinutes };
+}
+
+// ---------------------------------------------------------------
+// 전역 UI 상태(세션 한정 — 새로고침하면 초기화되어도 무방한 것들)
+// ---------------------------------------------------------------
+
+const state = {
+  todayData: null, // today.json 파싱 결과
+  computed: null, // 마지막 computeForToday().result
+  agendaExpanded: false,
+  activeSheet: null, // null | 'proposal' | 'editor' | 'settings'
+  proposalDismissed: false,
+  editorBlocks: null, // 편집 시트 열려있는 동안의 작업 사본
+  nowCardEls: null,
+};
+
+// ---------------------------------------------------------------
+// today.json (노션 데이터) 불러오기 — 기존 앱과 동일한 방식.
+// ---------------------------------------------------------------
+
+async function loadTodayJson(isRefresh) {
+  const btn = document.getElementById("refresh-btn");
+  const statusEl = document.getElementById("status");
+  if (isRefresh && btn) btn.classList.add("spin");
+  try {
+    const res = await fetch("./today.json?t=" + Date.now(), { cache: "no-store" });
+    state.todayData = await res.json();
+    if (statusEl) statusEl.textContent = "";
+  } catch (e) {
+    if (statusEl) statusEl.textContent = "새 데이터를 불러오지 못했습니다. 이전 화면을 보여드립니다.";
+    if (!state.todayData) state.todayData = {};
+  } finally {
+    if (btn) setTimeout(() => btn.classList.remove("spin"), 600);
+  }
+  renderShell();
+}
+
+// ---------------------------------------------------------------
+// 렌더링 — 오늘 화면
+// ---------------------------------------------------------------
+
+function renderShell() {
+  const now = new Date();
+  rolloverIfNewDay(now);
+
+  const { result, wakeMinutes } = computeForToday(now);
+  state.computed = result;
+  state.wakeMinutes = wakeMinutes;
+
+  renderHeader(now);
+  renderMain(now);
+  renderSleepBar();
+  scheduleTick();
+  maybeShowProposal();
+}
+
+function renderHeader(now) {
+  const d = state.todayData || {};
+  document.getElementById("date-label").textContent = d.date || `${now.getMonth() + 1}월 ${now.getDate()}일`;
+  document.getElementById("weekday-label").textContent = d.weekday || WEEKDAY_NAMES[logicalWeekday(now, store.settings.dayBoundaryHour)];
+}
+
+function renderMain(now) {
+  const app = document.getElementById("app");
+  app.innerHTML = "";
+  const d = state.todayData || {};
+
+  if (d.holiday_names && d.holiday_names.length) {
+    const banner = el("div", { className: "banner banner--holiday" });
+    banner.innerHTML = ICONS.holiday;
+    banner.appendChild(el("span", { textContent: "오늘은 공휴일입니다: " + d.holiday_names.join(", ") }));
+    app.appendChild(banner);
+  }
+
+  if (store.today.accepted) {
+    const banner = el("div", { className: "banner banner--adjust" });
+    banner.appendChild(el("span", { textContent: "오늘 일정이 조정되었습니다." }));
+    banner.appendChild(el("span", { className: "spacer" }));
+    const undoBtn = el("button", { className: "banner-link", textContent: "되돌리기" });
+    undoBtn.addEventListener("click", undoToday);
+    banner.appendChild(undoBtn);
+    app.appendChild(banner);
+  } else if (store.today.bedAt && !store.today.wakeOverride) {
+    app.appendChild(renderMorningBanner());
+  }
+
+  const special = d.special_items || [];
+  if (special.length) {
+    app.appendChild(renderSpecialScheduleCard(special));
+  } else {
+    app.appendChild(renderNowCard(now));
+    app.appendChild(renderAgenda(now));
+  }
+
+  if (d.todo_items && d.todo_items.length) {
+    app.appendChild(card(ICONS.check, "오늘의 할일", d.todo_items, "todo"));
+  }
+  app.appendChild(card(ICONS.book, "오늘의 소설 일정", d.novel_items || [], "novel"));
+}
+
+function renderMorningBanner() {
+  const wakeMinutes = getWakeMinutes(store.settings.dayBoundaryHour);
+  const banner = el("div", { className: "banner banner--wake" });
+  banner.appendChild(
+    el("span", { textContent: `방금 일어났어요? 예상 기상 ${boundaryMinutesToHHMM(wakeMinutes, store.settings.dayBoundaryHour)}` })
+  );
+  banner.appendChild(el("span", { className: "spacer" }));
+  const confirmBtn = el("button", { className: "banner-link", textContent: "확정" });
+  confirmBtn.addEventListener("click", () => {
+    store.today.wakeOverride = new Date().toISOString();
+    saveStore(true);
+    state.proposalDismissed = false;
+    renderShell();
+  });
+  const editBtn = el("button", { className: "banner-link", textContent: "직접 입력" });
+  editBtn.addEventListener("click", () => openWakeTimeSheet());
+  banner.appendChild(editBtn);
+  banner.appendChild(confirmBtn);
+  return banner;
+}
+
+function renderSpecialScheduleCard(items) {
+  const section = el("section", { className: "card" });
+  const head = el("div", { className: "card-head" });
+  head.appendChild(el("span", { className: "icon", innerHTML: ICONS.clock }));
+  head.appendChild(el("h2", { textContent: "오늘의 일정" }));
+  head.appendChild(el("span", { className: "count", textContent: items.length + "건" }));
+  section.appendChild(head);
+  const ul = el("ul", { className: "rows" });
+  items.forEach((it) => {
+    const li = el("li", { className: "row" });
+    li.appendChild(el("span", { className: "chip-time mono" + (it.time ? "" : " empty"), textContent: it.time || "--" }));
+    const body = el("div", { className: "row-body" });
+    body.appendChild(el("span", { className: "text", textContent: it.text || "" }));
+    li.appendChild(body);
+    ul.appendChild(li);
+  });
+  section.appendChild(ul);
+  return section;
+}
+
+function findCurrentIndex(blocks, nowMinutes) {
+  return blocks.findIndex((b) => b.start < b.end && nowMinutes >= b.start && nowMinutes < b.end);
+}
+
+function renderNowCard(now) {
+  const dayBoundaryHour = store.settings.dayBoundaryHour;
+  const nowMinutes = dateToBoundaryMinutes(now, dayBoundaryHour);
+  const blocks = state.computed.blocks;
+  const idx = findCurrentIndex(blocks, nowMinutes);
+
+  const wrap = el("div", { className: "now-card" });
+  if (idx === -1) {
+    const firstReal = blocks.find((b) => b.start < b.end);
+    const empty = el("div", { className: "now-card--empty" });
+    if (firstReal && nowMinutes < firstReal.start) {
+      empty.textContent = `기상 전이에요 · 예상 기상 ${boundaryMinutesToHHMM(state.wakeMinutes, dayBoundaryHour)}`;
+    } else {
+      empty.textContent = "취침 시간이에요";
+    }
+    wrap.appendChild(empty);
+    state.nowCardEls = null;
+    return wrap;
+  }
+
+  const b = blocks[idx];
+  wrap.appendChild(el("div", { className: "now-card__label", textContent: "지금" }));
+  const nameEl = el("div", { className: "now-card__name", textContent: b.name });
+  wrap.appendChild(nameEl);
+
+  const meta = el("div", { className: "now-card__meta" });
+  const timeEl = el("span", {
+    className: "now-card__time mono",
+    textContent: `${boundaryMinutesToHHMM(b.start, dayBoundaryHour)} → ${boundaryMinutesToHHMM(b.end, dayBoundaryHour)}`,
+  });
+  const remainEl = el("span", { className: "now-card__remain", textContent: `${b.end - nowMinutes}분 남음` });
+  meta.appendChild(timeEl);
+  meta.appendChild(remainEl);
+  wrap.appendChild(meta);
+
+  const bar = el("div", { className: "now-card__bar" });
+  const fill = el("div", { className: "now-card__bar-fill" });
+  const pct = Math.max(0, Math.min(100, ((nowMinutes - b.start) / (b.end - b.start)) * 100));
+  fill.style.width = pct + "%";
+  bar.appendChild(fill);
+  wrap.appendChild(bar);
+
+  state.nowCardEls = { remainEl, fillEl: fill, blockIndex: idx };
+  return wrap;
+}
+
+function renderAgenda(now) {
+  const dayBoundaryHour = store.settings.dayBoundaryHour;
+  const nowMinutes = dateToBoundaryMinutes(now, dayBoundaryHour);
+  const blocks = state.computed.blocks;
+  const currentIdx = findCurrentIndex(blocks, nowMinutes);
+
+  const wrap = el("div", { className: "agenda" });
+  const head = el("div", { className: "agenda__head" });
+  head.appendChild(el("h2", { textContent: "오늘 하루" }));
+  wrap.appendChild(head);
+
+  const ul = el("ul", { className: "agenda__list" });
+  const upcomingCount = 5;
+  const startIdx = currentIdx === -1 ? 0 : currentIdx;
+  const visible = state.agendaExpanded ? blocks : blocks.slice(startIdx, startIdx + upcomingCount);
+
+  visible.forEach((b) => {
+    const realIdx = blocks.indexOf(b);
+    const li = el("li", { className: "agenda__row", dataset: { cat: ROUTINE_CAT[b.category] || "other" } });
+    if (b.minutes === 0 && b.anchor !== "wake" && b.anchor !== "sleep") li.classList.add("is-removed");
+    if (realIdx === currentIdx) li.classList.add("is-current");
+    else if (b.end <= nowMinutes) li.classList.add("is-past");
+    li.appendChild(el("span", { className: "agenda__time mono", textContent: boundaryMinutesToHHMM(b.start, dayBoundaryHour) }));
+    li.appendChild(el("span", { className: "agenda__name", textContent: b.name }));
+    ul.appendChild(li);
+  });
+  wrap.appendChild(ul);
+
+  if (blocks.length > upcomingCount) {
+    const toggle = el("button", {
+      className: "agenda__toggle",
+      textContent: state.agendaExpanded ? "접기" : "전체 보기",
+    });
+    toggle.addEventListener("click", () => {
+      state.agendaExpanded = !state.agendaExpanded;
+      renderMain(new Date());
+    });
+    wrap.appendChild(toggle);
+  }
+  return wrap;
+}
+
+function card(iconHtml, title, items, sectionType) {
+  const section = el("section", { className: "card" });
+  const head = el("div", { className: "card-head" });
+  head.appendChild(el("span", { className: "icon", innerHTML: iconHtml }));
+  head.appendChild(el("h2", { textContent: title }));
+  head.appendChild(el("span", { className: "count", textContent: items.length + "건" }));
+  section.appendChild(head);
+
+  if (items.length) {
+    const ul = el("ul", { className: "rows" });
+    items.forEach((it) => ul.appendChild(notionRow(it, sectionType)));
+    section.appendChild(ul);
+  } else {
+    section.appendChild(el("p", { className: "empty", textContent: "등록된 항목이 없습니다." }));
+  }
+  return section;
+}
+
+function notionRow(item, sectionType) {
+  const tags = (item.tags || []).filter(Boolean);
+  let cat = "other";
+  if (sectionType === "todo") cat = TODO_CAT[tags[0]] || "other";
+  else if (sectionType === "novel") cat = NOVEL_STAGE_CAT[tags[1]] || "other";
+
+  const li = el("li", { className: "row", dataset: { cat } });
+  const timeText = (item.time || "").trim();
+  li.appendChild(el("span", { className: "chip-time mono" + (timeText ? "" : " empty"), textContent: timeText || "--" }));
+
+  const body = el("div", { className: "row-body" });
+  if (tags.length) {
+    const tagsWrap = el("div", { className: "tags" });
+    tags.forEach((t) => tagsWrap.appendChild(el("span", { className: "tag", textContent: t })));
+    body.appendChild(tagsWrap);
+  }
+  body.appendChild(el("span", { className: "text", textContent: item.text || "" }));
+  li.appendChild(body);
+  return li;
+}
+
+// ---------------------------------------------------------------
+// 상황판 1분 틱 — 화면 전체를 다시 그리지 않고 텍스트/바 너비만 갱신한다.
+// 다음 "분" 경계에 맞춘 단발 setTimeout 체인이며, 탭이 백그라운드로
+// 가면 멈추고 돌아오면 즉시 1회 갱신 후 체인을 다시 건다.
+// ---------------------------------------------------------------
+
+let tickTimer = null;
+
+function updateNowCard() {
+  if (!state.nowCardEls) {
+    // 블록 경계를 넘었을 수 있으니(예: 다음 블록으로 진입) 전체를 다시 그린다.
+    renderMain(new Date());
+    return;
+  }
+  const now = new Date();
+  const dayBoundaryHour = store.settings.dayBoundaryHour;
+  const nowMinutes = dateToBoundaryMinutes(now, dayBoundaryHour);
+  const b = state.computed.blocks[state.nowCardEls.blockIndex];
+  if (!b || nowMinutes < b.start || nowMinutes >= b.end) {
+    renderMain(now); // 블록이 바뀌었다 — 이번만 다시 그린다.
+    return;
+  }
+  state.nowCardEls.remainEl.textContent = `${b.end - nowMinutes}분 남음`;
+  const pct = Math.max(0, Math.min(100, ((nowMinutes - b.start) / (b.end - b.start)) * 100));
+  state.nowCardEls.fillEl.style.width = pct + "%";
+}
+
+function scheduleTick() {
+  clearTimeout(tickTimer);
+  if (document.hidden) return;
+  const now = new Date();
+  const msToNextMinute = 60000 - (now.getSeconds() * 1000 + now.getMilliseconds());
+  tickTimer = setTimeout(() => {
+    updateNowCard();
+    scheduleTick();
+  }, msToNextMinute);
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    clearTimeout(tickTimer);
+  } else {
+    updateNowCard();
+    scheduleTick();
+  }
+});
+
+// ---------------------------------------------------------------
+// 하단 취침 바
+// ---------------------------------------------------------------
+
+function renderSleepBar() {
+  let bar = document.getElementById("sleep-bar");
+  if (!bar) {
+    bar = el("div", { id: "sleep-bar", className: "sleep-bar" });
+    const inner = el("div", { className: "sleep-bar__inner" });
+    const btn = el("button", { className: "sleep-btn", id: "sleep-btn" });
+    btn.innerHTML = `${ICONS.moon} <span>취침</span>`;
+    btn.style.display = "flex";
+    btn.style.alignItems = "center";
+    btn.style.justifyContent = "center";
+    btn.style.gap = "8px";
+    btn.addEventListener("click", onSleepButtonTap);
+    inner.appendChild(btn);
+    bar.appendChild(inner);
+    document.body.appendChild(bar);
+  }
+  const btn = document.getElementById("sleep-btn");
+  const isTonight = !!store.today.bedAt;
+  btn.classList.toggle("is-active", isTonight);
+  btn.querySelector("span").textContent = isTonight ? "취침 기록됨 · 다시 기록" : "취침";
+}
+
+function onSleepButtonTap() {
+  store.today.bedAt = new Date().toISOString();
+  store.today.wakeOverride = null;
+  store.today.accepted = false;
+  store.today.protectedOverrides = [];
+  saveStore(true);
+  state.proposalDismissed = false;
+  renderShell();
+}
+
+// ---------------------------------------------------------------
+// 시트 공통 (제안 / 아침 보정 / 편집 / 설정)
+// ---------------------------------------------------------------
+
+function closeSheet() {
+  const root = document.getElementById("sheet-root");
+  root.innerHTML = "";
+  state.activeSheet = null;
+}
+
+function openSheet(title, subtitle, bodyChildren, actions) {
+  const root = document.getElementById("sheet-root");
+  root.innerHTML = "";
+  const overlay = el("div", { className: "sheet-overlay" });
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) closeSheet();
+  });
+  const sheet = el("div", { className: "sheet" });
+  sheet.appendChild(el("div", { className: "sheet__handle" }));
+  sheet.appendChild(el("h2", { className: "sheet__title", textContent: title }));
+  if (subtitle) sheet.appendChild(el("p", { className: "sheet__subtitle", textContent: subtitle }));
+  const body = el("div", { className: "sheet__body" });
+  bodyChildren.forEach((c) => body.appendChild(c));
+  sheet.appendChild(body);
+  if (actions && actions.length) {
+    const actionsRow = el("div", { className: "sheet__actions" });
+    actions.forEach((a) => actionsRow.appendChild(a));
+    sheet.appendChild(actionsRow);
+  }
+  overlay.appendChild(sheet);
+  root.appendChild(overlay);
+  return { overlay, sheet, body };
+}
+
+// ---- 아침 보정: 실제 기상 시각 직접 입력 ----
+
+function openWakeTimeSheet() {
+  state.activeSheet = "wake";
+  const input = el("input", { type: "time" });
+  const predicted = boundaryMinutesToHHMM(getWakeMinutes(store.settings.dayBoundaryHour), store.settings.dayBoundaryHour);
+  input.value = predicted;
+  const field = el("div", { className: "field-row" });
+  field.appendChild(el("label", { textContent: "실제 기상 시각" }));
+  field.appendChild(input);
+
+  const applyBtn = el("button", { className: "btn btn--primary", textContent: "확인" });
+  applyBtn.addEventListener("click", () => {
+    if (!input.value) return;
+    const [h, m] = input.value.split(":").map(Number);
+    const d = new Date();
+    d.setHours(h, m, 0, 0);
+    store.today.wakeOverride = d.toISOString();
+    saveStore(true);
+    state.proposalDismissed = false;
+    closeSheet();
+    renderShell();
+  });
+  const cancelBtn = el("button", { className: "btn btn--ghost", textContent: "취소" });
+  cancelBtn.addEventListener("click", closeSheet);
+
+  openSheet("아침 보정", "실제로 일어난 시각을 알려주면 오늘 일정을 다시 계산합니다.", [field], [cancelBtn, applyBtn]);
+}
+
+// ---- 제안 시트 ----
+
+function openProposalSheet() {
+  state.activeSheet = "proposal";
+  const overrides = new Set(store.today.protectedOverrides || []);
+  render();
+
+  function render() {
+    const { result } = computeForToday(new Date(), overrides);
+    const rows = result.adjustments.map((adj) => {
+      const row = el("div", { className: "proposal-row" });
+      const checkbox = el("input", { type: "checkbox" });
+      checkbox.checked = !overrides.has(adj.id);
+      checkbox.addEventListener("change", () => {
+        if (checkbox.checked) overrides.delete(adj.id);
+        else overrides.add(adj.id);
+        render();
+      });
+      row.appendChild(checkbox);
+      const label = adj.type === "removed" ? `${adj.name} 삭제` : `${adj.name} ${formatDuration(adj.before)} → ${formatDuration(adj.after)}`;
+      row.appendChild(el("span", { className: "proposal-row__label", textContent: label }));
+      row.appendChild(el("span", { className: "proposal-row__delta", textContent: `−${formatDuration(adj.before - adj.after)}` }));
+      return row;
+    });
+
+    const summary = el("div", { className: "proposal-summary" });
+    const sleepBlock = result.blocks.find((b) => b.anchor === "sleep");
+    summary.appendChild(
+      el("div", {
+        innerHTML: `집필 <strong>${result.blocks.filter((b) => b.category === "집필" && b.minutes > 0).length}블록</strong> · 취침 <strong>${boundaryMinutesToHHMM(sleepBlock.start, store.settings.dayBoundaryHour)}</strong> 유지`,
+      })
+    );
+    if (result.warnings.length) {
+      summary.appendChild(el("div", { textContent: "⚠ 오늘은 예산 안에 다 담기지 않았어요.", style: "color:var(--red);font-weight:700;" }));
+    }
+    if (!rows.length) {
+      summary.appendChild(el("div", { textContent: "오늘은 기본 루틴 그대로도 충분해요." }));
+    }
+
+    const applyBtn = el("button", { className: "btn btn--primary", textContent: "적용" });
+    applyBtn.addEventListener("click", () => {
+      store.today.protectedOverrides = Array.from(overrides);
+      store.today.accepted = true;
+      saveStore(true);
+      closeSheet();
+      renderShell();
+    });
+    const editBtn = el("button", { className: "btn btn--ghost", textContent: "직접 조정" });
+    editBtn.addEventListener("click", () => {
+      closeSheet();
+      openEditorSheet();
+    });
+
+    const wakeMinutes = getWakeMinutes(store.settings.dayBoundaryHour);
+    const { sheet } = openSheet(
+      `${boundaryMinutesToHHMM(wakeMinutes, store.settings.dayBoundaryHour)} 기상`,
+      "오늘 일정을 이렇게 조정할까요? 항목을 체크 해제하면 그 블록은 그대로 유지됩니다.",
+      [...rows, summary],
+      [editBtn, applyBtn]
+    );
+    sheet.querySelector(".sheet-overlay")?.addEventListener("click", () => {});
+  }
+}
+
+function maybeShowProposal() {
+  if (state.activeSheet) return;
+  if (state.proposalDismissed) return;
+  if (store.today.accepted) return;
+  if (!state.computed.adjustments.length) return;
+  if ((state.todayData?.special_items || []).length) return; // 특별 일정이 있는 날은 루틴 자체가 무의미
+  openProposalSheet();
+}
+
+function undoToday() {
+  store.today = emptyToday(store.today.date);
+  saveStore(true);
+  state.proposalDismissed = false;
+  closeSheet();
+  renderShell();
+}
+
+// ---- 루틴 편집 시트 (드래그 재배열 + 블록 편집) ----
+
+function openEditorSheet() {
+  state.activeSheet = "editor";
+  state.editorBlocks = store.blocks.map((b) => ({ ...b }));
+  renderEditor();
+}
+
+function budgetMinutes() {
+  const dayBoundaryHour = store.settings.dayBoundaryHour;
+  return hhmmToBoundaryMinutes(store.settings.baseSleep, dayBoundaryHour) - hhmmToBoundaryMinutes(store.settings.baseWake, dayBoundaryHour);
+}
+
+function renderEditor() {
+  const blocks = state.editorBlocks;
+  const total = blocks.filter((b) => b.anchor !== "wake" && b.anchor !== "sleep").reduce((s, b) => s + b.minutes, 0);
+  const budget = budgetMinutes();
+
+  const validation = el("div", {
+    className: "validation-bar " + (total > budget ? "is-error" : "is-ok"),
+    textContent: `합계 ${total}분 / 예산 ${budget}분 ${total > budget ? `(${total - budget}분 초과)` : "✓"}`,
+  });
+
+  const list = el("ul", { className: "block-list" });
+  blocks.forEach((b) => list.appendChild(blockItem(b)));
+  enableDragReorder(
+    list,
+    (order) => {
+      state.editorBlocks = order.map((id) => state.editorBlocks.find((b) => b.id === id));
+    },
+    (id) => openBlockEdit(id)
+  );
+
+  const addBtn = el("button", { className: "btn btn--ghost btn--block" });
+  addBtn.innerHTML = `${ICONS.plus} <span>블록 추가</span>`;
+  addBtn.style.display = "flex";
+  addBtn.style.alignItems = "center";
+  addBtn.style.justifyContent = "center";
+  addBtn.style.gap = "6px";
+  addBtn.addEventListener("click", () => {
+    const id = "block-" + Date.now();
+    state.editorBlocks.push({ id, name: "새 블록", category: "여유", minutes: 30, minMinutes: 0, days: null });
+    renderEditor();
+  });
+
+  const presetsBlock = renderPresetControls();
+
+  const saveBtn = el("button", { className: "btn btn--primary", textContent: "저장" });
+  saveBtn.addEventListener("click", () => {
+    store.blocks = state.editorBlocks;
+    saveStore(true);
+    closeSheet();
+    renderShell();
+  });
+  const cancelBtn = el("button", { className: "btn btn--ghost", textContent: "취소" });
+  cancelBtn.addEventListener("click", closeSheet);
+
+  openSheet("루틴 편집", "블록을 눌러 세부 사항을 바꾸거나, 잡고 끌어서 순서를 바꾸세요.", [validation, list, addBtn, presetsBlock], [cancelBtn, saveBtn]);
+}
+
+function blockItem(b) {
+  const cat = ROUTINE_CAT[b.category] || "other";
+  const li = el("li", { className: "block-item", dataset: { id: b.id, cat } });
+  li.appendChild(el("span", { className: "block-item__handle", innerHTML: ICONS.grip }));
+  const body = el("div", { className: "block-item__body" });
+  body.appendChild(el("div", { className: "block-item__name", textContent: b.name }));
+  const metaParts = [b.anchor === "clock" ? `${boundaryMinutesToHHMM(b.fixedAt, store.settings.dayBoundaryHour)} 고정` : `${b.minutes}분`];
+  if (b.days) metaParts.push("반복: " + b.days.map((d) => "월화수목금토일"[d]).join(""));
+  body.appendChild(el("div", { className: "block-item__meta", textContent: metaParts.join(" · ") }));
+  li.appendChild(body);
+  li.appendChild(el("span", { className: "block-item__chevron", innerHTML: ICONS.chevron }));
+  return li;
+}
+
+function openBlockEdit(id) {
+  const b = state.editorBlocks.find((x) => x.id === id);
+  if (!b) return;
+
+  const isEndpoint = b.anchor === "wake" || b.anchor === "sleep";
+  const nameField = fieldRow("이름", el("input", { type: "text", value: b.name }));
+  const catField = fieldRow("카테고리", selectField(["집필", "작업", "운동", "여유", "식사", "기타"], b.category));
+  const minutesField = fieldRow("길이(분)", el("input", { type: "number", value: b.minutes, min: 0, step: 10 }));
+  const minMinutesField = fieldRow("최소 길이(분)", el("input", { type: "number", value: b.minMinutes || 0, min: 0, step: 10 }));
+  if (isEndpoint) {
+    // 기상/취침은 하루의 시작·끝을 표시하는 길이 0짜리 표지일 뿐이라 길이 입력이 의미 없다.
+    minutesField.style.display = "none";
+    minMinutesField.style.display = "none";
+  }
+  const anchorField = fieldRow("앵커", selectField(["유동", "시각 고정", "기상", "취침"], anchorLabel(b.anchor)));
+  const fixedAtInput = el("input", { type: "time", value: b.fixedAt != null ? boundaryMinutesToHHMM(b.fixedAt, store.settings.dayBoundaryHour) : "13:00" });
+  const fixedAtField = fieldRow("고정 시각", fixedAtInput);
+  fixedAtField.style.display = b.anchor === "clock" ? "" : "none";
+  anchorField.querySelector("select").addEventListener("change", (e) => {
+    fixedAtField.style.display = e.target.value === "시각 고정" ? "" : "none";
+  });
+
+  const daysRow = el("div", { className: "field-row" });
+  daysRow.appendChild(el("label", { textContent: "반복 요일 (전체 선택 시 매일)" }));
+  const dayToggles = el("div", { className: "day-toggles" });
+  const activeDays = new Set(b.days || [0, 1, 2, 3, 4, 5, 6]);
+  "월화수목금토일".split("").forEach((label, i) => {
+    const t = el("button", { className: "day-toggle" + (activeDays.has(i) ? " is-on" : ""), textContent: label });
+    t.addEventListener("click", () => {
+      if (activeDays.has(i)) activeDays.delete(i);
+      else activeDays.add(i);
+      t.classList.toggle("is-on");
+    });
+    dayToggles.appendChild(t);
+  });
+  daysRow.appendChild(dayToggles);
+
+  const protectedField = fieldRow(
+    "보호(자동 축소 대상에서 제외)",
+    el("input", { type: "checkbox", checked: !!b.protected })
+  );
+  protectedField.classList.add("inline");
+
+  const deleteBtn = el("button", { className: "btn btn--danger" });
+  deleteBtn.innerHTML = `${ICONS.trash} <span>삭제</span>`;
+  deleteBtn.style.display = "flex";
+  deleteBtn.style.alignItems = "center";
+  deleteBtn.style.justifyContent = "center";
+  deleteBtn.style.gap = "6px";
+  deleteBtn.addEventListener("click", () => {
+    state.editorBlocks = state.editorBlocks.filter((x) => x.id !== id);
+    closeSheet();
+    renderEditor();
+  });
+
+  const saveBtn = el("button", { className: "btn btn--primary", textContent: "완료" });
+  saveBtn.addEventListener("click", () => {
+    b.name = nameField.querySelector("input").value || b.name;
+    b.category = catField.querySelector("select").value;
+    b.minutes = Number(minutesField.querySelector("input").value) || 0;
+    b.minMinutes = Number(minMinutesField.querySelector("input").value) || 0;
+    const anchorVal = anchorField.querySelector("select").value;
+    b.anchor = anchorVal === "유동" ? undefined : { "시각 고정": "clock", "기상": "wake", "취침": "sleep" }[anchorVal];
+    if (b.anchor === "clock") {
+      const [h, m] = fixedAtInput.value.split(":").map(Number);
+      b.fixedAt = hhmmToBoundaryMinutes(`${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`, store.settings.dayBoundaryHour);
+    } else {
+      delete b.fixedAt;
+    }
+    b.days = activeDays.size === 7 ? null : Array.from(activeDays).sort();
+    b.protected = protectedField.querySelector("input").checked;
+    closeSheet();
+    renderEditor();
+  });
+  const cancelBtn = el("button", { className: "btn btn--ghost", textContent: "취소" });
+  cancelBtn.addEventListener("click", () => {
+    closeSheet();
+    renderEditor();
+  });
+
+  const body = el("div", { className: "block-edit" }, [
+    nameField, catField, minutesField, minMinutesField, anchorField, fixedAtField, daysRow, protectedField, deleteBtn,
+  ]);
+  openSheet("블록 편집", null, [body], [cancelBtn, saveBtn]);
+}
+
+function anchorLabel(anchor) {
+  return { clock: "시각 고정", wake: "기상", sleep: "취침" }[anchor] || "유동";
+}
+
+function fieldRow(labelText, inputEl) {
+  const row = el("div", { className: "field-row" });
+  row.appendChild(el("label", { textContent: labelText }));
+  row.appendChild(inputEl);
+  return row;
+}
+
+function selectField(options, current) {
+  const select = el("select");
+  options.forEach((o) => {
+    const opt = el("option", { value: o, textContent: o });
+    if (o === current) opt.selected = true;
+    select.appendChild(opt);
+  });
+  return select;
+}
+
+// 노션식 드래그 재배열: 300ms 길게 누르면 드래그 모드로 들어가고,
+// 그 전에 놓거나 8px 넘게 움직이면 각각 "탭"/"스크롤"로 취급한다.
+// 매 이동마다 전체를 다시 그리지 않고 transform과 필요할 때만의
+// insertBefore 한 번으로 처리해 화면이 가볍게 반응하도록 한다.
+function enableDragReorder(listEl, onReorder, onTap) {
+  let dragEl = null;
+  let startY = 0;
+  let pressTimer = null;
+  let dragging = false;
+  let pointerId = null;
+
+  listEl.addEventListener("pointerdown", (e) => {
+    const li = e.target.closest("li.block-item");
+    if (!li) return;
+    dragEl = li;
+    startY = e.clientY;
+    pointerId = e.pointerId;
+    dragging = false;
+    pressTimer = setTimeout(() => {
+      dragging = true;
+      dragEl.classList.add("dragging");
+      try {
+        dragEl.setPointerCapture(pointerId);
+      } catch {}
+    }, 300);
+  });
+
+  listEl.addEventListener("pointermove", (e) => {
+    if (!dragEl) return;
+    if (!dragging) {
+      if (Math.abs(e.clientY - startY) > 8) {
+        clearTimeout(pressTimer);
+        dragEl = null;
+      }
+      return;
+    }
+    e.preventDefault();
+    const dy = e.clientY - startY;
+    dragEl.style.transform = `translateY(${dy}px)`;
+
+    const siblings = Array.from(listEl.querySelectorAll("li.block-item")).filter((x) => x !== dragEl);
+    for (const sib of siblings) {
+      const r = sib.getBoundingClientRect();
+      const mid = r.top + r.height / 2;
+      const dragIsBefore = !!(dragEl.compareDocumentPosition(sib) & Node.DOCUMENT_POSITION_FOLLOWING);
+      if (e.clientY > mid && dragIsBefore) {
+        listEl.insertBefore(dragEl, sib.nextSibling);
+        startY = e.clientY;
+        dragEl.style.transform = "translateY(0)";
+        break;
+      }
+      if (e.clientY < mid && !dragIsBefore) {
+        listEl.insertBefore(dragEl, sib);
+        startY = e.clientY;
+        dragEl.style.transform = "translateY(0)";
+        break;
+      }
+    }
+  });
+
+  function endDrag() {
+    clearTimeout(pressTimer);
+    if (dragEl) {
+      const wasDragging = dragging;
+      const id = dragEl.dataset.id;
+      dragEl.style.transform = "";
+      dragEl.classList.remove("dragging");
+      if (wasDragging) {
+        const order = Array.from(listEl.querySelectorAll("li.block-item")).map((x) => x.dataset.id);
+        onReorder(order);
+      } else {
+        onTap(id);
+      }
+    }
+    dragEl = null;
+    dragging = false;
+  }
+  listEl.addEventListener("pointerup", endDrag);
+  listEl.addEventListener("pointercancel", endDrag);
+}
+
+function renderPresetControls() {
+  const wrap = el("div", { className: "settings-group" });
+  wrap.appendChild(el("h3", { textContent: "프리셋" }));
+  const list = el("div", { className: "preset-list" });
+  Object.keys(store.presets).forEach((name) => {
+    const chip = el("button", { className: "preset-chip", textContent: name + "  ×" });
+    chip.addEventListener("click", (e) => {
+      if (confirm(`"${name}" 프리셋을 불러올까요? 현재 편집 중인 내용은 사라집니다.`)) {
+        state.editorBlocks = store.presets[name].map((b) => ({ ...b }));
+        renderEditor();
+      }
+    });
+    list.appendChild(chip);
+  });
+  const saveBtn = el("button", { className: "preset-chip", textContent: "+ 현재 저장" });
+  saveBtn.addEventListener("click", () => {
+    const name = prompt("프리셋 이름을 입력하세요");
+    if (!name) return;
+    store.presets[name] = state.editorBlocks.map((b) => ({ ...b }));
+    saveStore(true);
+    renderEditor();
+  });
+  list.appendChild(saveBtn);
+  wrap.appendChild(list);
+  return wrap;
+}
+
+// ---- 설정 시트 ----
+
+function openSettingsSheet() {
+  state.activeSheet = "settings";
+  renderSettings();
+}
+
+function renderSettings() {
+  const s = store.settings;
+
+  const editRoutineBtn = el("button", { className: "btn btn--ghost btn--block", textContent: "루틴 편집 열기" });
+  editRoutineBtn.addEventListener("click", () => {
+    closeSheet();
+    openEditorSheet();
+  });
+
+  const baseWakeInput = el("input", { type: "time", value: s.baseWake });
+  const baseSleepInput = el("input", { type: "time", value: s.baseSleep });
+  const sleepTargetInput = el("input", { type: "number", value: Math.round(s.sleepTargetMinutes / 60 * 10) / 10, step: 0.5, min: 4, max: 12 });
+  const dropBreakfastInput = el("input", { type: "checkbox", checked: s.dropBreakfastWhenLate });
+
+  const basics = el("div", { className: "settings-group" });
+  basics.appendChild(el("h3", { textContent: "기준 시각" }));
+  basics.appendChild(fieldRow("기본 기상", baseWakeInput));
+  basics.appendChild(fieldRow("기본 취침", baseSleepInput));
+  basics.appendChild(fieldRow("목표 수면 시간(시간)", sleepTargetInput));
+  const dropRow = fieldRow("기상이 늦으면 아침 식사 자동 삭제", dropBreakfastInput);
+  dropRow.classList.add("inline");
+  basics.appendChild(dropRow);
+
+  const priorityGroup = el("div", { className: "settings-group" });
+  priorityGroup.appendChild(el("h3", { textContent: "축소 우선순위 (위에서부터 먼저 줄어듭니다)" }));
+  const priorityList = el("ul", { className: "priority-list" });
+  const order = [...s.reducePriority];
+  function renderPriorityList() {
+    priorityList.innerHTML = "";
+    order.forEach((name, i) => {
+      const li = el("li", {});
+      li.appendChild(el("span", { className: "rank", textContent: String(i + 1) }));
+      li.appendChild(el("span", { textContent: name, style: "flex:1" }));
+      const upBtn = el("button", { className: "btn btn--ghost", textContent: "↑" });
+      upBtn.style.padding = "4px 10px";
+      upBtn.disabled = i === 0;
+      upBtn.addEventListener("click", () => {
+        [order[i - 1], order[i]] = [order[i], order[i - 1]];
+        renderPriorityList();
+      });
+      const downBtn = el("button", { className: "btn btn--ghost", textContent: "↓" });
+      downBtn.style.padding = "4px 10px";
+      downBtn.disabled = i === order.length - 1;
+      downBtn.addEventListener("click", () => {
+        [order[i + 1], order[i]] = [order[i], order[i + 1]];
+        renderPriorityList();
+      });
+      li.appendChild(upBtn);
+      li.appendChild(downBtn);
+      priorityList.appendChild(li);
+    });
+  }
+  renderPriorityList();
+  priorityGroup.appendChild(priorityList);
+
+  const dataGroup = el("div", { className: "settings-group" });
+  dataGroup.appendChild(el("h3", { textContent: "백업" }));
+  const btnRow = el("div", { className: "btn-row" });
+  const exportBtn = el("button", { className: "btn btn--ghost", textContent: "내보내기" });
+  exportBtn.addEventListener("click", exportData);
+  const importLabel = el("label", { className: "btn btn--ghost", textContent: "불러오기" });
+  importLabel.style.textAlign = "center";
+  const importInput = el("input", { type: "file", accept: "application/json", style: "display:none" });
+  importInput.addEventListener("change", (e) => {
+    if (e.target.files[0]) importData(e.target.files[0]);
+  });
+  importLabel.appendChild(importInput);
+  btnRow.appendChild(exportBtn);
+  btnRow.appendChild(importLabel);
+  dataGroup.appendChild(btnRow);
+  const resetBtn = el("button", { className: "btn btn--danger btn--block", textContent: "초기화" });
+  resetBtn.style.marginTop = "10px";
+  resetBtn.addEventListener("click", () => {
+    if (confirm("모든 설정과 루틴을 기본값으로 되돌릴까요? 되돌릴 수 없습니다.")) {
+      store = defaultStore();
+      saveStore(true);
+      closeSheet();
+      renderShell();
+    }
+  });
+  dataGroup.appendChild(resetBtn);
+
+  const saveBtn = el("button", { className: "btn btn--primary", textContent: "저장" });
+  saveBtn.addEventListener("click", () => {
+    s.baseWake = baseWakeInput.value || s.baseWake;
+    s.baseSleep = baseSleepInput.value || s.baseSleep;
+    s.sleepTargetMinutes = Math.round(Number(sleepTargetInput.value) * 60) || s.sleepTargetMinutes;
+    s.dropBreakfastWhenLate = dropBreakfastInput.checked;
+    s.reducePriority = order;
+    saveStore(true);
+    closeSheet();
+    renderShell();
+  });
+  const cancelBtn = el("button", { className: "btn btn--ghost", textContent: "닫기" });
+  cancelBtn.addEventListener("click", closeSheet);
+
+  openSheet("설정", null, [editRoutineBtn, basics, priorityGroup, dataGroup], [cancelBtn, saveBtn]);
+}
+
+function exportData() {
+  const blob = new Blob([JSON.stringify(store, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = el("a", { href: url, download: `schedule-backup-${logicalDateKey(new Date(), store.settings.dayBoundaryHour)}.json` });
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function importData(file) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const parsed = JSON.parse(reader.result);
+      if (!parsed || !Array.isArray(parsed.blocks) || !parsed.settings) throw new Error("invalid shape");
+      store = migrate(parsed);
+      saveStore(true);
+      closeSheet();
+      renderShell();
+    } catch (e) {
+      alert("올바른 백업 파일이 아닙니다.");
+    }
+  };
+  reader.readAsText(file);
+}
+
+// ---------------------------------------------------------------
+// 초기화
+// ---------------------------------------------------------------
+
+document.getElementById("refresh-btn").addEventListener("click", () => loadTodayJson(true));
+document.getElementById("settings-btn").addEventListener("click", openSettingsSheet);
+document.getElementById("settings-btn").innerHTML = ICONS.gear;
+document.getElementById("refresh-btn").innerHTML = ICONS.refresh;
+
+loadTodayJson(false);
+
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("service-worker.js", { scope: "./" });
+}

@@ -1,0 +1,12 @@
+<!--
+  참고용 벡터 원본. 실제 배포되는 건 tools/make_icons.py가 만든 docs/icon-*.png뿐이다
+  (런타임에 쓰지 않는 SVG를 서비스워커 캐시 목록에 넣지 않기 위해 docs/에는 두지 않는다).
+  좌표는 make_icons.py의 pt(x, y) 좌표계(중심 기준 [-0.5, 0.5])를 그대로 512 캔버스에 옮긴 것.
+-->
+<svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <rect x="20" y="20" width="472" height="472" rx="113" fill="#2E6C5A" />
+  <rect x="123" y="128" width="266" height="256" rx="26" fill="#FFFFFF" />
+  <rect x="123" y="199" width="266" height="14" rx="6" fill="#1F4E41" />
+  <rect x="184" y="93" width="26" height="61" rx="13" fill="#1F4E41" />
+  <rect x="302" y="93" width="26" height="61" rx="13" fill="#1F4E41" />
+</svg>

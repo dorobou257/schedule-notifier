@@ -1,6 +1,7 @@
 """
-매년 1회(예: 1월 2일) 실행되어, 파이썬 holidays 라이브러리로 앞으로 1년치
-대한민국 공휴일을 계산해 노션 [일정] DB에 채워 넣는 스크립트.
+매년 1회(예: 1월 2일) 실행되어, 파이썬 holidays 라이브러리로 실행 시점 기준
+한국 시각(KST)의 그 해 대한민국 공휴일을 계산해 노션 [일정] DB에 채워 넣는
+스크립트.
 
 필요한 환경변수(GitHub Actions Secrets):
 - NOTION_TOKEN
@@ -11,10 +12,16 @@ holidays 라이브러리가 로컬에서 계산한 값을 그대로 사용한다
 """
 
 import os
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 import holidays
 import requests
+
+# notify.py도 같은 상수를 쓰지만, 이 스크립트는 GitHub Actions Secrets로
+# NOTION_TOKEN/SCHEDULE_DB_ID만 받고 NOVEL_DB_ID/NTFY_TOPIC은 없으므로
+# (notify.py를 import하면 모듈 최상단에서 그 값들을 요구해 실패한다)
+# 이 한 줄만 따로 정의한다.
+KST = timezone(timedelta(hours=9))
 
 NOTION_TOKEN = os.environ["NOTION_TOKEN"]
 SCHEDULE_DB_ID = os.environ["SCHEDULE_DB_ID"]
@@ -69,7 +76,7 @@ def create_holiday_page(date_str: str, name: str) -> None:
 
 
 def main():
-    year = datetime.now().year
+    year = datetime.now(KST).year
     holiday_list = fetch_holidays(year)
     added = 0
     for date_str, name in holiday_list:
