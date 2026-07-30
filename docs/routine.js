@@ -166,12 +166,17 @@ function expandBy(segment, priority, surplus) {
  * 압축한다. 점심이 13:00에 고정되어 있으므로 오전 지연은 오전 세그먼트
  * 안에서만 흡수되고 오후·저녁·취침은 건드리지 않는다.
  *
+ * sleepMinutes: 오늘 밤 취침으로 실제 기록된 시각이 있으면 그 값을 넘긴다.
+ * 취침 블록(anchor:"sleep")의 고정 시각을 이 값으로 대체해, 취침이 늦춰지거나
+ * 당겨진 만큼 저녁 세그먼트가 자동으로 늘어나거나 줄어들게 한다. 넘기지
+ * 않으면 blocks에 정의된 기본 취침 시각(보통 settings.baseSleep)을 쓴다.
+ *
  * @returns {{ blocks: Array, adjustments: Array, warnings: Array }}
  *   blocks: { ...원본 필드, start, end } — start/end는 경계 좌표계 분.
  *   adjustments: 제안 시트에 그대로 나열할 수 있는 변경 내역.
  *   warnings: 취침 전에 다 밀어넣지 못한 경우 등 이상 상황 표시.
  */
-export function computeSchedule({ blocks = BASE_BLOCKS, settings = DEFAULT_SETTINGS, weekday, wakeMinutes }) {
+export function computeSchedule({ blocks = BASE_BLOCKS, settings = DEFAULT_SETTINGS, weekday, wakeMinutes, sleepMinutes }) {
   const priority = settings.reducePriority || DEFAULT_SETTINGS.reducePriority;
   const dayBoundaryHour = settings.dayBoundaryHour ?? DEFAULT_SETTINGS.dayBoundaryHour;
   const baseWakeMinutes = hhmmToBoundaryMinutes(settings.baseWake, dayBoundaryHour);
@@ -225,7 +230,8 @@ export function computeSchedule({ blocks = BASE_BLOCKS, settings = DEFAULT_SETTI
       continue;
     }
     if (b.anchor === "clock" || b.anchor === "sleep") {
-      const budget = b.fixedAt - cursor;
+      const fixedAt = b.anchor === "sleep" && sleepMinutes != null ? sleepMinutes : b.fixedAt;
+      const budget = fixedAt - cursor;
       if (budget < 0) {
         // 기상 자체가 이 앵커의 고정 시각을 이미 지나버린 극단적인 경우.
         // 취침 우선 원칙과 마찬가지로 앵커 시각을 뒤로 밀지 않고, 대신
@@ -240,10 +246,10 @@ export function computeSchedule({ blocks = BASE_BLOCKS, settings = DEFAULT_SETTI
         }
         warnings.push({ type: "segment-empty", beforeId: b.id });
         segment = [];
-        cursor = Math.max(cursor, b.fixedAt); // 타임라인이 거꾸로 흐르지 않도록.
+        cursor = Math.max(cursor, fixedAt); // 타임라인이 거꾸로 흐르지 않도록.
       } else {
         flushSegment(budget);
-        cursor = b.fixedAt;
+        cursor = fixedAt;
       }
       const start = cursor;
       const end = cursor + b.minutes;

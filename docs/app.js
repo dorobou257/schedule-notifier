@@ -169,19 +169,32 @@ function getWakeMinutes(dayBoundaryHour, now) {
   });
 }
 
+/**
+ * 오늘 밤 취침으로 실제 기록된 시각. wakeMinutes와 반대로 "활성화되지 않은
+ * 동안"(forDate가 아직 오늘이 아닐 때, 즉 오늘 밤 예정 상태) 적용된다 —
+ * 그 bedAt은 "지금부터 forDate까지"의 취침을 뜻하므로, forDate가 실제로
+ * 되어 그 전환이 이미 끝난 뒤에는(활성화된 뒤에는) 오늘 밤 것이 아니게 된다.
+ */
+function getSleepOverrideMinutes(now, dayBoundaryHour) {
+  if (isSleepActive(now, dayBoundaryHour)) return null;
+  if (!store.today.bedAt) return null;
+  return dateToBoundaryMinutes(new Date(store.today.bedAt), dayBoundaryHour);
+}
+
 /** protectedIds: 제안 시트에서 사용자가 체크 해제해 "오늘은 지키자"고 정한 블록 id 집합.
  * 커밋된 값은 store.today.protectedOverrides, 시트 안에서 토글하는 동안은 임시 값을 넘긴다. */
 function computeForToday(now, protectedIds) {
   const dayBoundaryHour = store.settings.dayBoundaryHour;
   const weekday = logicalWeekday(now, dayBoundaryHour);
   const wakeMinutes = getWakeMinutes(dayBoundaryHour, now);
+  const sleepMinutes = getSleepOverrideMinutes(now, dayBoundaryHour);
   const overrides = protectedIds || new Set(store.today.protectedOverrides || []);
   const blocks = store.blocks.map((b) => (overrides.has(b.id) ? { ...b, protected: true } : b));
   const settings = {
     ...store.settings,
     dropBreakfastWhenLate: overrides.has("breakfast") ? false : store.settings.dropBreakfastWhenLate,
   };
-  return { result: computeSchedule({ blocks, settings, weekday, wakeMinutes }), wakeMinutes };
+  return { result: computeSchedule({ blocks, settings, weekday, wakeMinutes, sleepMinutes }), wakeMinutes };
 }
 
 // ---------------------------------------------------------------
@@ -256,8 +269,9 @@ function renderMain(now) {
     app.appendChild(banner);
   }
 
-  // 저녁에 미리 기록해둔 취침(내일 몫)은 그 날짜가 실제로 되기 전까진 오늘
-  // 화면에 아무 영향도 주지 않는다 — 배너도 마찬가지로 활성 상태일 때만 보인다.
+  // 기상 예측(아침 시간대)은 forDate가 실제로 오늘이 되기 전까진 반영하지
+  // 않지만, 취침 시각 자체는 "오늘 밤" 얘기라 예약한 즉시 반영된다(오늘의
+  // 취침 블록이 밀리고 휴식이 늘어난다) — computeForToday의 sleepMinutes 참고.
   const sleepActive = isSleepActive(now, store.settings.dayBoundaryHour);
   if (sleepActive && store.today.accepted) {
     const banner = el("div", { className: "banner banner--adjust" });
@@ -269,6 +283,8 @@ function renderMain(now) {
     app.appendChild(banner);
   } else if (sleepActive && store.today.bedAt && !store.today.wakeOverride) {
     app.appendChild(renderMorningBanner());
+  } else if (!sleepActive && store.today.bedAt) {
+    app.appendChild(renderPendingSleepBanner());
   }
 
   const special = d.special_items || [];
@@ -303,6 +319,28 @@ function renderMorningBanner() {
   editBtn.addEventListener("click", () => openWakeTimeSheet());
   banner.appendChild(editBtn);
   banner.appendChild(confirmBtn);
+  return banner;
+}
+
+function renderPendingSleepBanner() {
+  const dayBoundaryHour = store.settings.dayBoundaryHour;
+  const bedAtMinutes = dateToBoundaryMinutes(new Date(store.today.bedAt), dayBoundaryHour);
+  const predictedWake = computeWakeMinutes({
+    bedAtMinutes,
+    wakeOverrideMinutes: null,
+    sleepTargetMinutes: store.settings.sleepTargetMinutes,
+    baseWakeMinutes: hhmmToBoundaryMinutes(store.settings.baseWake, dayBoundaryHour),
+  });
+  const banner = el("div", { className: "banner banner--wake" });
+  banner.appendChild(
+    el("span", {
+      textContent: `오늘 밤 ${boundaryMinutesToHHMM(bedAtMinutes, dayBoundaryHour)} 취침 예정 · 내일 예상 기상 ${boundaryMinutesToHHMM(predictedWake, dayBoundaryHour)}`,
+    })
+  );
+  banner.appendChild(el("span", { className: "spacer" }));
+  const editBtn = el("button", { className: "banner-link", textContent: "변경" });
+  editBtn.addEventListener("click", () => openBedTimeSheet());
+  banner.appendChild(editBtn);
   return banner;
 }
 

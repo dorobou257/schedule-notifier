@@ -124,6 +124,26 @@ test("기상 07:00(1시간 이름) → 여유가 남는 시간을 흡수해 점�
   assert.equal(boundaryMinutesToHHMM(byId(r, "lunch").start), "13:00");
 });
 
+test("sleepMinutes로 취침을 미루면 휴식이 그만큼 늘어나 취침 시각과 맞물린다", () => {
+  const wakeMinutes = hhmmToBoundaryMinutes("08:00");
+  const sleepMinutes = hhmmToBoundaryMinutes("02:00"); // 기준(00:30)보다 1시간 30분 늦음
+  const r = computeSchedule({ blocks: BASE_BLOCKS, settings: DEFAULT_SETTINGS, weekday: MON, wakeMinutes, sleepMinutes });
+
+  assert.equal(boundaryMinutesToHHMM(byId(r, "sleep").start), "02:00", "취침 앵커 자체가 실제 예약 시각으로 옮겨간다");
+  assert.equal(minutesOf(r, "rest"), 240, "휴식이 90분을 더 흡수해 150→240분");
+  assert.equal(boundaryMinutesToHHMM(byId(r, "rest").end), "02:00", "빈 시간 없이 취침과 맞물린다");
+  // 아침~점심 이전 세그먼트는 취침 시각과 무관하게 그대로다.
+  assert.equal(minutesOf(r, "breakfast"), 60);
+  assert.equal(r.adjustments.length, 0);
+});
+
+test("sleepMinutes를 넘기지 않으면 기본 취침(baseSleep) 그대로 계산된다", () => {
+  const wakeMinutes = hhmmToBoundaryMinutes("08:00");
+  const r = computeSchedule({ blocks: BASE_BLOCKS, settings: DEFAULT_SETTINGS, weekday: MON, wakeMinutes });
+  assert.equal(boundaryMinutesToHHMM(byId(r, "sleep").start), "00:30");
+  assert.equal(minutesOf(r, "rest"), 150);
+});
+
 test("반복 요일로 빠진 블록의 시간은 다음 여유 블록이 흡수해 취침 전 빈 시간이 남지 않는다", () => {
   // 화/목처럼 운동(월/수/금 전용)이 없는 날, 그 60분이 허공에 뜨지 않고
   // 같은 세그먼트의 여유 블록(휴식)이 흡수해야 한다 — 실사용 중 "휴식이 23:30에
