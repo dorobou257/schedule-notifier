@@ -1,24 +1,34 @@
 {
-  "date": "2026-07-30",
-  "weekday": "목요일",
+  "date": "2026-07-31",
+  "weekday": "금요일",
   "holiday_names": [],
   "special_items": [],
-  "todo_items": [
+  "todo_items": [],
+  "novel_items": [
     {
       "time": "",
       "tags": [
-        "할일"
+        "챌린지",
+        "초고"
       ],
-      "text": "기숙사 서류제출"
+      "text": "45화"
     },
     {
-      "time": "09:00",
+      "time": "",
       "tags": [
-        "할일"
+        "챌린지",
+        "초고"
       ],
-      "text": "결핵 검사"
+      "text": "44화"
+    },
+    {
+      "time": "",
+      "tags": [
+        "챌린지",
+        "연재"
+      ],
+      "text": "44화"
     }
   ],
-  "novel_items": [],
   "notified": true
 }
