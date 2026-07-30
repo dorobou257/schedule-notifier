@@ -112,16 +112,30 @@ test("기상 13:30(점심 고정 시각을 이미 지남) → 오전 세그먼�
   assert.equal(boundaryMinutesToHHMM(byId(r, "sleep").start), "00:30");
 });
 
-test("기상 07:00(1시간 이름) → 블록을 늘리지 않고 점심 앞에 여백만 남긴다", () => {
+test("기상 07:00(1시간 이름) → 여유가 남는 시간을 흡수해 점심까지 빈틈없이 채운다", () => {
   const wakeMinutes = hhmmToBoundaryMinutes("07:00");
   const r = computeSchedule({ blocks: BASE_BLOCKS, settings: DEFAULT_SETTINGS, weekday: MON, wakeMinutes });
 
-  assert.equal(r.adjustments.length, 0, "이른 기상은 삭제/축소를 유발하지 않는다");
-  assert.equal(minutesOf(r, "breakfast"), 60);
-  assert.equal(minutesOf(r, "buffer"), 120, "여유가 늘어나지 않는다");
+  assert.equal(r.adjustments.length, 0, "이른 기상은 삭제/축소를 유발하지 않는다(단순 확장은 기록 대상이 아님)");
+  assert.equal(minutesOf(r, "breakfast"), 60, "식사 시간 자체는 늘어나지 않는다");
+  assert.equal(minutesOf(r, "buffer"), 180, "1시간 여유분을 여유가 흡수해 120→180분");
   assert.equal(boundaryMinutesToHHMM(byId(r, "breakfast").start), "07:00");
-  assert.equal(boundaryMinutesToHHMM(byId(r, "buffer").end), "12:00", "블록 끝은 07:00+300분=12:00");
-  assert.equal(boundaryMinutesToHHMM(byId(r, "lunch").start), "13:00", "점심은 12:00~13:00 사이 60분 여백을 남기고 그대로 고정");
+  assert.equal(boundaryMinutesToHHMM(byId(r, "buffer").end), "13:00", "빈 시간 없이 점심 시작과 정확히 맞물린다");
+  assert.equal(boundaryMinutesToHHMM(byId(r, "lunch").start), "13:00");
+});
+
+test("반복 요일로 빠진 블록의 시간은 다음 여유 블록이 흡수해 취침 전 빈 시간이 남지 않는다", () => {
+  // 화/목처럼 운동(월/수/금 전용)이 없는 날, 그 60분이 허공에 뜨지 않고
+  // 같은 세그먼트의 여유 블록(휴식)이 흡수해야 한다 — 실사용 중 "휴식이 23:30에
+  // 끝나는데 취침 00:30까지 빈 시간은 뭐냐"는 혼란으로 이어졌던 버그(회귀 방지).
+  const wakeMinutes = hhmmToBoundaryMinutes("08:00");
+  const r = computeSchedule({ blocks: BASE_BLOCKS, settings: DEFAULT_SETTINGS, weekday: TUE, wakeMinutes });
+
+  assert.equal(byId(r, "exercise"), undefined, "화요일엔 운동이 없다");
+  assert.equal(minutesOf(r, "rest"), 210, "운동이 빠진 60분을 휴식이 흡수해 150→210분");
+  assert.equal(boundaryMinutesToHHMM(byId(r, "rest").end), "00:30", "빈 시간 없이 취침과 정확히 맞물린다");
+  assert.equal(boundaryMinutesToHHMM(byId(r, "sleep").start), "00:30");
+  assert.equal(r.adjustments.length, 0, "정상 기상일엔 확장이 조정 제안으로 뜨지 않는다");
 });
 
 test("우선순위를 뒤집으면(집필이 최우선으로 희생) 다른 블록이 대신 줄어든다", () => {

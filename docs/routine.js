@@ -139,6 +139,26 @@ function reduceBy(segment, priority, deficit, adjustments, forced) {
 }
 
 /**
+ * 세그먼트에 남는 시간(surplus)이 있을 때, 우선순위상 가장 먼저 줄어들 카테고리의
+ * 블록(기본값: 여유)에 그 시간을 몰아준다 — 같은 카테고리가 deficit에서는
+ * "가장 먼저 줄고", surplus에서는 "가장 먼저 늘어나는" 것이 대칭적이라 자연스럽다.
+ * 이렇게 해야 특정 요일에만 빠지는 블록(예: 화/목의 운동)이 있어도 그 시간이
+ * 허공에 붕 뜨지 않고 바로 다음 유동 블록이 흡수해, 취침 전까지 빈 시간 없이
+ * 하루가 채워진다. 확인·되돌리기가 필요한 "줄어듦"이 아니라 그저 정확한 하루
+ * 표시일 뿐이므로 adjustments에는 기록하지 않는다.
+ */
+function expandBy(segment, priority, surplus) {
+  for (const cat of priority) {
+    const candidates = segment.filter((b) => b.category === cat && !b.protected);
+    if (candidates.length) {
+      candidates[candidates.length - 1].minutes += surplus;
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * 하루치 블록 목록을 실제 기상 시각에 맞춰 재배치한다. 부작용 없는 순수 함수.
  *
  * 핵심 아이디어: anchor:"clock"/"sleep" 블록을 경계로 하루를 세그먼트로
@@ -186,6 +206,8 @@ export function computeSchedule({ blocks = BASE_BLOCKS, settings = DEFAULT_SETTI
       deficit = reduceBy(segment, priority, deficit, adjustments, false);
       if (deficit > 0) deficit = reduceBy(segment, priority, deficit, adjustments, true);
       if (deficit > 0) warnings.push({ type: "segment-overflow", minutes: deficit });
+    } else if (deficit < 0) {
+      expandBy(segment, priority, -deficit);
     }
     for (const b of segment) {
       const start = cursor;
