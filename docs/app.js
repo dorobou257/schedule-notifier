@@ -58,8 +58,19 @@ function formatDuration(mins) {
 // 등)은 즉시 쓴다.
 // ---------------------------------------------------------------
 
-function emptyToday(dateKey) {
-  return { date: dateKey || null, bedAt: null, wakeOverride: null, protectedOverrides: [], accepted: false };
+function emptySleep() {
+  // forDate: 이 취침 기록이 "어느 논리적 날짜의 기상"을 예측하는지. 취침은 보통
+  // 밤에 기록하므로 forDate는 대개 지금(now)의 논리적 날짜보다 하루 뒤다 —
+  // 그래서 그날 밤 동안은 "예정" 상태로만 저장해두고, 실제로 그 날짜가 되어야
+  // 오늘 일정 계산에 반영한다(applySleepToday 참고).
+  return { forDate: null, bedAt: null, wakeOverride: null, protectedOverrides: [], accepted: false };
+}
+
+/** "YYYY-MM-DD" 하루 뒤의 같은 형식 날짜 키. */
+function nextDateKey(dateKey) {
+  const [y, m, d] = dateKey.split("-").map(Number);
+  const dt = new Date(y, m - 1, d + 1);
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
 }
 
 function defaultStore() {
@@ -68,7 +79,7 @@ function defaultStore() {
     settings: { ...DEFAULT_SETTINGS },
     blocks: BASE_BLOCKS.map((b) => ({ ...b })),
     presets: {},
-    today: emptyToday(null),
+    today: emptySleep(),
   };
 }
 
@@ -79,7 +90,7 @@ function migrate(parsed) {
     settings: { ...base.settings, ...(parsed.settings || {}) },
     blocks: Array.isArray(parsed.blocks) && parsed.blocks.length ? parsed.blocks : base.blocks,
     presets: parsed.presets && typeof parsed.presets === "object" ? parsed.presets : {},
-    today: parsed.today && typeof parsed.today === "object" ? { ...emptyToday(null), ...parsed.today } : base.today,
+    today: parsed.today && typeof parsed.today === "object" ? { ...emptySleep(), ...parsed.today } : base.today,
   };
 }
 
@@ -117,10 +128,16 @@ function saveStore(immediate) {
 
 let store = loadStore();
 
-function rolloverIfNewDay(now) {
-  const key = logicalDateKey(now, store.settings.dayBoundaryHour);
-  if (store.today.date !== key) {
-    store.today = emptyToday(key);
+/**
+ * 취침 기록이 예측하는 날짜(forDate)가 이미 지나버렸으면(오늘보다 이전이면)
+ * 낡은 기록이니 비운다. forDate가 오늘이거나(적용 중) 내일이면(아직 밤이라
+ * 대기 중) 그대로 둔다 — 이 둘을 구분 못 하고 무조건 지우면, 밤에 기록해둔
+ * 취침이 자정~새벽 사이 논리적 날짜가 바뀌는 순간 적용되기도 전에 사라진다.
+ */
+function rolloverIfStale(now) {
+  const todayKey = logicalDateKey(now, store.settings.dayBoundaryHour);
+  if (store.today.forDate && store.today.forDate < todayKey) {
+    store.today = emptySleep();
     saveStore(true);
     state.proposalDismissed = false;
   }
@@ -131,12 +148,19 @@ function rolloverIfNewDay(now) {
 // 그대로 재사용해 실시간으로 다시 계산한다.
 // ---------------------------------------------------------------
 
-function getWakeMinutes(dayBoundaryHour) {
+/** 취침 기록이 "오늘"(forDate === todayKey)에 대한 것일 때만 실제 계산에 반영한다.
+ * 저녁에 미리 기록해둔 내일치 예측은 그 논리적 날짜가 되기 전까지는 오늘
+ * 화면에 영향을 주지 않는다. */
+function isSleepActive(now, dayBoundaryHour) {
+  return store.today.forDate === logicalDateKey(now, dayBoundaryHour);
+}
+
+function getWakeMinutes(dayBoundaryHour, now) {
   const baseWakeMinutes = hhmmToBoundaryMinutes(store.settings.baseWake, dayBoundaryHour);
-  const bedAtMinutes = store.today.bedAt ? dateToBoundaryMinutes(new Date(store.today.bedAt), dayBoundaryHour) : null;
-  const wakeOverrideMinutes = store.today.wakeOverride
-    ? dateToBoundaryMinutes(new Date(store.today.wakeOverride), dayBoundaryHour)
-    : null;
+  const active = isSleepActive(now, dayBoundaryHour);
+  const bedAtMinutes = active && store.today.bedAt ? dateToBoundaryMinutes(new Date(store.today.bedAt), dayBoundaryHour) : null;
+  const wakeOverrideMinutes =
+    active && store.today.wakeOverride ? dateToBoundaryMinutes(new Date(store.today.wakeOverride), dayBoundaryHour) : null;
   return computeWakeMinutes({
     bedAtMinutes,
     wakeOverrideMinutes,
@@ -150,7 +174,7 @@ function getWakeMinutes(dayBoundaryHour) {
 function computeForToday(now, protectedIds) {
   const dayBoundaryHour = store.settings.dayBoundaryHour;
   const weekday = logicalWeekday(now, dayBoundaryHour);
-  const wakeMinutes = getWakeMinutes(dayBoundaryHour);
+  const wakeMinutes = getWakeMinutes(dayBoundaryHour, now);
   const overrides = protectedIds || new Set(store.today.protectedOverrides || []);
   const blocks = store.blocks.map((b) => (overrides.has(b.id) ? { ...b, protected: true } : b));
   const settings = {
@@ -201,7 +225,7 @@ async function loadTodayJson(isRefresh) {
 
 function renderShell() {
   const now = new Date();
-  rolloverIfNewDay(now);
+  rolloverIfStale(now);
 
   const { result, wakeMinutes } = computeForToday(now);
   state.computed = result;
@@ -232,7 +256,10 @@ function renderMain(now) {
     app.appendChild(banner);
   }
 
-  if (store.today.accepted) {
+  // 저녁에 미리 기록해둔 취침(내일 몫)은 그 날짜가 실제로 되기 전까진 오늘
+  // 화면에 아무 영향도 주지 않는다 — 배너도 마찬가지로 활성 상태일 때만 보인다.
+  const sleepActive = isSleepActive(now, store.settings.dayBoundaryHour);
+  if (sleepActive && store.today.accepted) {
     const banner = el("div", { className: "banner banner--adjust" });
     banner.appendChild(el("span", { textContent: "오늘 일정이 조정되었습니다." }));
     banner.appendChild(el("span", { className: "spacer" }));
@@ -240,7 +267,7 @@ function renderMain(now) {
     undoBtn.addEventListener("click", undoToday);
     banner.appendChild(undoBtn);
     app.appendChild(banner);
-  } else if (store.today.bedAt && !store.today.wakeOverride) {
+  } else if (sleepActive && store.today.bedAt && !store.today.wakeOverride) {
     app.appendChild(renderMorningBanner());
   }
 
@@ -259,7 +286,7 @@ function renderMain(now) {
 }
 
 function renderMorningBanner() {
-  const wakeMinutes = getWakeMinutes(store.settings.dayBoundaryHour);
+  const wakeMinutes = getWakeMinutes(store.settings.dayBoundaryHour, new Date());
   const banner = el("div", { className: "banner banner--wake" });
   banner.appendChild(
     el("span", { textContent: `방금 일어났어요? 예상 기상 ${boundaryMinutesToHHMM(wakeMinutes, store.settings.dayBoundaryHour)}` })
@@ -531,7 +558,12 @@ function openBedTimeSheet() {
   applyBtn.addEventListener("click", () => {
     if (!input.value) return;
     const [h, m] = input.value.split(":").map(Number);
-    store.today.bedAt = nearestTimeToNow(h, m, new Date()).toISOString();
+    const bedAtDate = nearestTimeToNow(h, m, new Date());
+    const dayBoundaryHour = store.settings.dayBoundaryHour;
+    store.today.bedAt = bedAtDate.toISOString();
+    // 취침은 그 논리적 하루가 끝나기 전(밤)에 기록하므로, 예측은 "다음" 논리적
+    // 날짜의 기상에 적용된다. 그 날짜가 되기 전까지는 오늘 화면을 그대로 둔다.
+    store.today.forDate = nextDateKey(logicalDateKey(bedAtDate, dayBoundaryHour));
     store.today.wakeOverride = null;
     store.today.accepted = false;
     store.today.protectedOverrides = [];
@@ -585,7 +617,7 @@ function openSheet(title, subtitle, bodyChildren, actions) {
 function openWakeTimeSheet() {
   state.activeSheet = "wake";
   const input = el("input", { type: "time" });
-  const predicted = boundaryMinutesToHHMM(getWakeMinutes(store.settings.dayBoundaryHour), store.settings.dayBoundaryHour);
+  const predicted = boundaryMinutesToHHMM(getWakeMinutes(store.settings.dayBoundaryHour, new Date()), store.settings.dayBoundaryHour);
   input.value = predicted;
   const field = el("div", { className: "field-row" });
   field.appendChild(el("label", { textContent: "실제 기상 시각" }));
@@ -660,7 +692,7 @@ function openProposalSheet() {
       openEditorSheet();
     });
 
-    const wakeMinutes = getWakeMinutes(store.settings.dayBoundaryHour);
+    const wakeMinutes = getWakeMinutes(store.settings.dayBoundaryHour, new Date());
     const { sheet } = openSheet(
       `${boundaryMinutesToHHMM(wakeMinutes, store.settings.dayBoundaryHour)} 기상`,
       "오늘 일정을 이렇게 조정할까요? 항목을 체크 해제하면 그 블록은 그대로 유지됩니다.",
@@ -681,7 +713,7 @@ function maybeShowProposal() {
 }
 
 function undoToday() {
-  store.today = emptyToday(store.today.date);
+  store.today = emptySleep();
   saveStore(true);
   state.proposalDismissed = false;
   closeSheet();
