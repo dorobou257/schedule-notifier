@@ -47,7 +47,10 @@
 }
 
 *{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
-html,body{ height:100%; }
+/* 드래그로 블록 순서를 바꿀 때 브라우저의 "당겨서 새로고침"이 끼어들지
+   않도록 오버스크롤 자체를 끈다. 이 앱은 위로 당겨서 새로고침할 일이
+   없고(헤더에 새로고침 버튼이 있다) 드래그를 방해하기만 한다. */
+html,body{ height:100%; overscroll-behavior-y:none; }
 body{
   margin:0;
   background:var(--bg);
@@ -204,7 +207,7 @@ button.sleep-btn.is-active{ background:var(--pine-ink); }
 }
 @keyframes fade{ from{ opacity:0; } }
 .sheet{
-  width:100%; max-width:520px; max-height:88vh; overflow-y:auto;
+  width:100%; max-width:520px; max-height:88vh; overflow-y:auto; overscroll-behavior:contain;
   background:var(--surface); border-radius:20px 20px 0 0; box-shadow:var(--shadow);
   padding:10px 20px calc(20px + env(safe-area-inset-bottom));
   animation:slide-up .25s ease;
@@ -248,10 +251,20 @@ li.block-item[data-cat="write"]{ border-left-color:var(--cat-write); }
 li.block-item[data-cat="work"]{ border-left-color:var(--cat-work); }
 li.block-item[data-cat="exercise"]{ border-left-color:var(--cat-exercise); }
 li.block-item[data-cat="rest"]{ border-left-color:var(--cat-rest); }
+/* 드래그가 시작되면 리스트 전체의 네이티브 세로 팬을 끈다. 이게 없으면
+   브라우저가 스크롤/새로고침 제스처를 가져가버린다(JS의 비패시브
+   touchmove preventDefault와 한 쌍 — app.js enableDragReorder 참고). */
+.is-dragging{ touch-action:none; }
+.is-dragging li.block-item{ touch-action:none; }
 li.block-item.pressing{ transform:scale(0.97); box-shadow:var(--shadow); }
 li.block-item.dragging{
   box-shadow:var(--shadow); background:var(--surface-2); z-index:5; position:relative; cursor:grabbing;
+  will-change:transform;
+  /* transform은 JS가 매 프레임 직접 쓰므로 전이를 걸지 않는다(손가락 지연 방지) */
   transition:box-shadow 150ms ease, background 150ms ease;
+}
+@media (prefers-reduced-motion: reduce){
+  li.block-item{ transition:none; }
 }
 .block-item__handle{ flex:none; width:22px; height:22px; color:var(--faint); display:flex; align-items:center; justify-content:center; cursor:grab; }
 .block-item__body{ flex:1; min-width:0; display:flex; flex-direction:column; gap:2px; }
