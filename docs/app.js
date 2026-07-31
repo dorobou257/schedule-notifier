@@ -957,9 +957,12 @@ function enableDragReorder(listEl, onReorder, onTap) {
     startY = e.clientY;
     pointerId = e.pointerId;
     dragging = false;
+    dragEl.classList.add("pressing");
     pressTimer = setTimeout(() => {
       dragging = true;
+      dragEl.classList.remove("pressing");
       dragEl.classList.add("dragging");
+      dragEl.style.transform = "scale(1.03)";
       try {
         dragEl.setPointerCapture(pointerId);
       } catch {}
@@ -971,13 +974,14 @@ function enableDragReorder(listEl, onReorder, onTap) {
     if (!dragging) {
       if (Math.abs(e.clientY - startY) > 8) {
         clearTimeout(pressTimer);
+        dragEl.classList.remove("pressing");
         dragEl = null;
       }
       return;
     }
     e.preventDefault();
     const dy = e.clientY - startY;
-    dragEl.style.transform = `translateY(${dy}px)`;
+    dragEl.style.transform = `translateY(${dy}px) scale(1.03)`;
 
     const siblings = Array.from(listEl.querySelectorAll("li.block-item")).filter((x) => x !== dragEl);
     for (const sib of siblings) {
@@ -987,13 +991,13 @@ function enableDragReorder(listEl, onReorder, onTap) {
       if (e.clientY > mid && dragIsBefore) {
         listEl.insertBefore(dragEl, sib.nextSibling);
         startY = e.clientY;
-        dragEl.style.transform = "translateY(0)";
+        dragEl.style.transform = "scale(1.03)";
         break;
       }
       if (e.clientY < mid && !dragIsBefore) {
         listEl.insertBefore(dragEl, sib);
         startY = e.clientY;
-        dragEl.style.transform = "translateY(0)";
+        dragEl.style.transform = "scale(1.03)";
         break;
       }
     }
@@ -1006,6 +1010,7 @@ function enableDragReorder(listEl, onReorder, onTap) {
       const id = dragEl.dataset.id;
       dragEl.style.transform = "";
       dragEl.classList.remove("dragging");
+      dragEl.classList.remove("pressing");
       if (wasDragging) {
         const order = Array.from(listEl.querySelectorAll("li.block-item")).map((x) => x.dataset.id);
         onReorder(order);
