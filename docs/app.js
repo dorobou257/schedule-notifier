@@ -474,14 +474,12 @@ function renderMain(now) {
     app.appendChild(renderAgenda(now));
   }
 
-  // 노션에서 이미 완료 처리한 항목은 화면에서 뺀다. 다만 "원래 없었다"와
-  // "다 끝냈다"는 구분해서 보여줘야 오해가 없다(doneCount).
-  const allTodos = d.todo_items || [];
-  const todos = allTodos.filter((it) => !it.done);
-  if (allTodos.length) {
-    app.appendChild(card(ICONS.check, "오늘의 할일", todos, "todo", allTodos.length - todos.length));
+  // 할일도 소설 일정도, 완료한 것을 목록에서 지우지 않는다 — 지워버리면
+  // 잘못 눌렀을 때 되돌릴 방법이 없다. 체크된 채로 남겨둔다.
+  const todos = d.todo_items || [];
+  if (todos.length) {
+    app.appendChild(card(ICONS.check, "오늘의 할일", todos, "todo"));
   }
-  // 소설 일정은 완료한 것도 체크된 채로 그대로 둔다(되돌릴 수 있어야 하므로).
   app.appendChild(card(ICONS.book, "오늘의 소설 일정", d.novel_items || [], "novel"));
 }
 
@@ -782,21 +780,21 @@ function renderAgenda(now) {
   return wrap;
 }
 
-function card(iconHtml, title, items, sectionType, doneCount = 0) {
+function card(iconHtml, title, items, sectionType) {
   const section = el("section", { className: "card" });
   const head = el("div", { className: "card-head" });
   head.appendChild(el("span", { className: "icon", innerHTML: iconHtml }));
   head.appendChild(el("h2", { textContent: title }));
-  head.appendChild(el("span", { className: "count", textContent: items.length + "건" }));
+  // 완료한 항목도 목록에 남으므로, 몇 건이 남았는지는 숫자로 알려준다.
+  const pending = items.filter((it) => !it.done).length;
+  const countText = pending === items.length ? `${items.length}건` : `${pending}/${items.length}건`;
+  head.appendChild(el("span", { className: "count", textContent: countText }));
   section.appendChild(head);
 
   if (items.length) {
     const ul = el("ul", { className: "rows" });
     items.forEach((it) => ul.appendChild(notionRow(it, sectionType)));
     section.appendChild(ul);
-  } else if (doneCount) {
-    // "아무것도 없음"과 "다 끝냄"은 전혀 다른 상황이다 — 구분해서 보여준다.
-    section.appendChild(el("p", { className: "empty is-done", textContent: `${doneCount}건 모두 완료했습니다.` }));
   } else {
     section.appendChild(el("p", { className: "empty", textContent: "등록된 항목이 없습니다." }));
   }
