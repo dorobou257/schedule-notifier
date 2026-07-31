@@ -2,32 +2,45 @@
   "date": "2026-07-31",
   "weekday": "금요일",
   "holiday_names": [],
-  "special_items": [],
+  "special_items": [
+    {
+      "id": "3ae25ba2-c8ef-8008-8546-d400bd64594b",
+      "time": "06:00",
+      "text": "가족 휴가",
+      "done": false
+    }
+  ],
   "todo_items": [],
   "novel_items": [
     {
+      "id": "37e25ba2-c8ef-8078-bc3e-d70db9de13f7",
       "time": "",
       "tags": [
         "챌린지",
         "초고"
       ],
-      "text": "45화"
+      "text": "45화",
+      "done": true
     },
     {
+      "id": "37e25ba2-c8ef-8056-b89d-e7d1fd27357e",
       "time": "",
       "tags": [
         "챌린지",
         "초고"
       ],
-      "text": "44화"
+      "text": "44화",
+      "done": true
     },
     {
+      "id": "37e25ba2-c8ef-8022-894d-e4caae345f46",
       "time": "",
       "tags": [
         "챌린지",
         "연재"
       ],
-      "text": "44화"
+      "text": "44화",
+      "done": true
     }
   ],
   "notified": true
