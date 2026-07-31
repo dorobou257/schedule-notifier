@@ -522,8 +522,19 @@ function writeBlocksOf(blocks) {
   return blocks.filter((b) => b.category === "집필" && b.minutes > 0);
 }
 
+// 집필 블록에 붙일 수 있는 소설 유형. 실제로 원고를 쓰는 단계만 해당한다 —
+// 트리트먼트/시놉시스/설정/연재는 노션에서 확인만 하면 되는 일이라
+// 집필 시간을 차지하면 안 된다.
+const WRITING_STAGES = new Set(["초고", "퇴고"]);
+
+/** 소설 항목의 유형(tags = [작품, 유형])이 집필 단계인지. */
+function isWritingStage(item) {
+  return WRITING_STAGES.has((item.tags || [])[1] || "");
+}
+
 /** @returns {Map<string, object>} blockId → 소설 항목 */
-function resolveNovelAssignments(blocks, novelItems) {
+function resolveNovelAssignments(blocks, allNovelItems) {
+  const novelItems = allNovelItems.filter(isWritingStage);
   const map = store.novelAssign.map || {};
   const excluded = new Set(store.novelAssign.excluded || []);
   const byKey = new Map(novelItems.map((it) => [novelKey(it), it]));
@@ -751,7 +762,9 @@ function notionRow(item, sectionType) {
   body.appendChild(el("span", { className: "text", textContent: item.text || "" }));
   li.appendChild(body);
 
-  if (sectionType === "novel") {
+  // 초고·퇴고만 집필 블록에 붙는다. 트리트먼트/시놉시스/설정/연재는 목록에
+  // 그대로 보이되 배정 대상이 아니라 버튼도 달지 않는다.
+  if (sectionType === "novel" && isWritingStage(item)) {
     // 이 소설 일정이 어느 집필 블록에 배정됐는지 보여주고, 눌러서 바꾼다.
     const key = novelKey(item);
     let assignedTo = null;
