@@ -421,9 +421,8 @@ function renderMain(now) {
   const app = document.getElementById("app");
   app.innerHTML = "";
   const d = state.todayData || {};
-  // 완료한 소설 일정은 집필 블록 배정에서도 빠진다 — 다음 일정이 자동으로 당겨진다.
-  const activeNovels = (d.novel_items || []).filter((it) => !it.done);
-  state.novelAssignments = resolveNovelAssignments(state.computed.blocks, activeNovels);
+  // 완료 여부와 유형에 따라 어느 블록에 붙일지는 resolveNovelAssignments가 가린다.
+  state.novelAssignments = resolveNovelAssignments(state.computed.blocks, d.novel_items || []);
 
   if (d.holiday_names && d.holiday_names.length) {
     const banner = el("div", { className: "banner banner--holiday" });
@@ -482,8 +481,8 @@ function renderMain(now) {
   if (allTodos.length) {
     app.appendChild(card(ICONS.check, "오늘의 할일", todos, "todo", allTodos.length - todos.length));
   }
-  const allNovels = d.novel_items || [];
-  app.appendChild(card(ICONS.book, "오늘의 소설 일정", activeNovels, "novel", allNovels.length - activeNovels.length));
+  // 소설 일정은 완료한 것도 체크된 채로 그대로 둔다(되돌릴 수 있어야 하므로).
+  app.appendChild(card(ICONS.book, "오늘의 소설 일정", d.novel_items || [], "novel"));
 }
 
 function renderMorningBanner() {
@@ -569,18 +568,22 @@ function blocksOfCategory(blocks, category) {
   return blocks.filter((b) => b.category === category && b.minutes > 0);
 }
 
-// 실제로 원고를 쓰는 단계만 "집필"에 붙는다. 트리트먼트/시놉시스/설정/연재는
-// 자료를 보거나 올리는 일에 가까우니 "작업"으로 간다.
+// 실제로 원고를 쓰는 단계만 "집필"에 붙는다. 트리트먼트/시놉시스/설정은
+// 자료를 만지는 일에 가까우니 "작업"으로 간다.
 const WRITING_STAGES = new Set(["초고", "퇴고"]);
+// 연재는 올려두기만 하면 되는 일이라 하루의 어느 블록도 차지하지 않는다.
+const UNSCHEDULED_STAGES = new Set(["연재"]);
 
-/** 소설 항목의 유형(tags = [작품, 유형])이 집필 단계인지. */
-function isWritingStage(item) {
-  return WRITING_STAGES.has((item.tags || [])[1] || "");
+/** 소설 항목의 유형. tags = [작품, 유형]. */
+function stageOf(item) {
+  return (item.tags || [])[1] || "";
 }
 
-/** 이 소설 항목이 붙을 수 있는 블록 성격. */
+/** 이 소설 항목이 붙을 수 있는 블록 성격. 어디에도 안 붙으면 null. */
 function targetCategoryOf(item) {
-  return isWritingStage(item) ? "집필" : "작업";
+  const stage = stageOf(item);
+  if (UNSCHEDULED_STAGES.has(stage)) return null;
+  return WRITING_STAGES.has(stage) ? "집필" : "작업";
 }
 
 /** 한 성격 안에서 블록당 1건씩 채운다. 블록보다 항목이 많으면 남는 건 배정되지 않는다. */
@@ -612,11 +615,13 @@ function assignInto(result, targetBlocks, items) {
 /** @returns {Map<string, object>} blockId → 소설 항목 */
 function resolveNovelAssignments(blocks, novelItems) {
   const result = new Map();
+  // 이미 완료한 항목은 자리를 차지하지 않는다 — 다음 일정이 당겨진다.
+  const pending = novelItems.filter((it) => !it.done);
   for (const category of ["집필", "작업"]) {
     assignInto(
       result,
       blocksOfCategory(blocks, category),
-      novelItems.filter((it) => targetCategoryOf(it) === category)
+      pending.filter((it) => targetCategoryOf(it) === category)
     );
   }
   return result;
@@ -809,16 +814,19 @@ function notionRow(item, sectionType) {
   // 노션 페이지 id가 있는 항목만 체크할 수 있다(id 없이는 어느 페이지인지
   // 특정할 수 없다 — today.json이 아직 갱신되지 않은 경우).
   if (item.id) {
-    const box = el("input", { type: "checkbox", className: "row-check" });
+    // 체크해도 목록에서 지우지 않는다 — 지워버리면 잘못 눌렀을 때 되돌릴
+    // 방법이 없다. 체크된 채로 남겨두고 다시 누르면 노션에서도 해제된다.
+    const box = el("input", { type: "checkbox", className: "row-check", checked: !!item.done });
     box.addEventListener("change", async () => {
+      const next = box.checked;
       box.disabled = true;
-      li.classList.add("is-done");
-      await setItemDone(item, true);
-      // 사라지는 모습을 잠깐 보여준 뒤 다시 그린다.
-      setTimeout(() => renderMain(new Date()), 220);
+      li.classList.toggle("is-checked", next);
+      await setItemDone(item, next);
+      renderMain(new Date());
     });
     li.appendChild(box);
   }
+  if (item.done) li.classList.add("is-checked");
 
   const timeText = (item.time || "").trim();
   li.appendChild(el("span", { className: "chip-time mono" + (timeText ? "" : " empty"), textContent: timeText || "--" }));
@@ -832,9 +840,10 @@ function notionRow(item, sectionType) {
   body.appendChild(el("span", { className: "text", textContent: item.text || "" }));
   li.appendChild(body);
 
-  if (sectionType === "novel") {
-    // 이 소설 일정이 어느 블록에 배정됐는지 보여주고, 눌러서 바꾼다.
-    // 초고·퇴고는 집필 블록으로, 나머지 유형은 작업 블록으로 간다.
+  // 이 소설 일정이 어느 블록에 배정됐는지 보여주고, 눌러서 바꾼다.
+  // 초고·퇴고는 집필, 트리트먼트·시놉시스·설정은 작업, 연재는 어디에도 안 붙는다.
+  // 이미 완료한 항목도 배정할 게 없으니 버튼을 달지 않는다.
+  if (sectionType === "novel" && targetCategoryOf(item) && !item.done) {
     const key = novelKey(item);
     let assignedTo = null;
     for (const [blockId, it] of state.novelAssignments) {

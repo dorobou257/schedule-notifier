@@ -227,8 +227,10 @@ li.row[data-cat="other"]{ border-left-color:var(--cat-other); }
 input.row-check{
   flex:none; width:19px; height:19px; margin:2px 0 0; accent-color:var(--pine); cursor:pointer;
 }
-li.row.is-done{ opacity:0; transform:translateX(10px); transition:opacity 200ms ease, transform 200ms ease; }
-@media (prefers-reduced-motion: reduce){ li.row.is-done{ transition:none; } }
+/* 체크한 항목은 목록에 남되 끝난 티가 나게 — 다시 눌러 되돌릴 수 있다. */
+li.row.is-checked{ opacity:.5; transition:opacity 200ms ease; }
+li.row.is-checked .text{ text-decoration:line-through; }
+@media (prefers-reduced-motion: reduce){ li.row.is-checked{ transition:none; } }
 
 /* 소설 일정 행의 "어느 집필 블록에 배정됐는지" 버튼 */
 button.row-assign{
