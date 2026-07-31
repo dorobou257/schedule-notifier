@@ -38,6 +38,15 @@ function stubFetch(handler) {
 
 const jsonRes = (body, status = 200) => new Response(JSON.stringify(body), { status });
 
+/** 조회 범위 필터에서 대상 날짜를 되짚어 그 날짜의 페이지를 만들어준다.
+ *  워커가 범위로 물어보고 원본 날짜로 거르므로, mock도 날짜를 맞춰줘야 한다. */
+function pageMatchingQuery(id, body) {
+  const from = body.filter.and[0].date.on_or_after;
+  const d = new Date(from + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() + 1); // on_or_after는 대상 날짜 하루 전
+  return page(id, { 날짜: dateProp(d.toISOString().slice(0, 10)) });
+}
+
 test("GET /today: 노션 페이지를 today.json과 같은 형태로 바꾼다", async () => {
   const schedulePages = [
     page("p1", { 이름: title("병원 예약"), 종류: select("일정"), 날짜: dateProp("2026-07-31T14:30:00+09:00") }),
@@ -67,10 +76,15 @@ test("GET /today: 노션 페이지를 today.json과 같은 형태로 바꾼다",
     assert.deepEqual(data.novel_items[0].tags, ["챌린지", "초고"]);
     assert.equal(data.source, "worker");
 
-    // 노션에 보낸 요청도 확인 — Authorization 헤더와 날짜 필터.
+    // 노션에 보낸 요청도 확인 — Authorization 헤더와 날짜 범위 필터.
     assert.equal(stub.calls.length, 2);
     assert.equal(stub.calls[0].headers.Authorization, "Bearer secret_test");
-    assert.deepEqual(stub.calls[0].body.filter, { property: "날짜", date: { equals: "2026-07-31" } });
+    assert.deepEqual(stub.calls[0].body.filter, {
+      and: [
+        { property: "날짜", date: { on_or_after: "2026-07-30" } },
+        { property: "날짜", date: { before: "2026-08-02" } },
+      ],
+    });
   } finally {
     stub.restore();
   }
@@ -88,8 +102,10 @@ test("GET /today: 날짜 형식이 잘못되면 400", async () => {
 });
 
 test("PATCH /item: 우리 DB의 페이지면 완료 체크박스를 바꾼다", async () => {
-  const stub = stubFetch((url) => {
-    if (url.includes("/query")) return jsonRes({ results: [page("p2", {})], has_more: false });
+  const stub = stubFetch((url, init) => {
+    if (url.includes("/query")) {
+      return jsonRes({ results: [pageMatchingQuery("p2", JSON.parse(init.body))], has_more: false });
+    }
     return jsonRes({ object: "page" });
   });
   try {
@@ -109,7 +125,9 @@ test("PATCH /item: 우리 DB의 페이지면 완료 체크박스를 바꾼다", 
 });
 
 test("PATCH /item: 우리 DB에 없는 페이지는 403이고 노션을 수정하지 않는다", async () => {
-  const stub = stubFetch(() => jsonRes({ results: [page("other", {})], has_more: false }));
+  const stub = stubFetch((url, init) =>
+    jsonRes({ results: [pageMatchingQuery("other", JSON.parse(init.body))], has_more: false })
+  );
   try {
     const res = await worker.fetch(
       new Request("https://w.dev/item", { method: "PATCH", body: JSON.stringify({ id: "남의페이지", done: true }) }),
@@ -151,6 +169,58 @@ test("노션이 실패하면 502로 감싸고 이유를 남긴다", async () => 
     const res = await worker.fetch(new Request("https://w.dev/today?date=2026-07-31"), ENV);
     assert.equal(res.status, 502);
     assert.match((await res.json()).error, /401/);
+  } finally {
+    stub.restore();
+  }
+});
+
+test("한국 오전 시각이 붙은 일정은 UTC 기준으로 밀리지 않고 제 날짜에 잡힌다", () => {
+  // 노션 date 필터는 UTC로 비교하므로 8/1 06:00(KST)=7/31 21:00(UTC)이 되어
+  // equals 필터로는 하루 전에 걸려버렸다. 실사용 중 "가족 휴가(8/1 06:00)"가
+  // 7/31에 뜨면서 발견된 버그 — 넓게 받아온 뒤 원본 날짜로 거르는지 확인한다.
+  const 가족휴가 = page("fam", {
+    이름: title("가족 휴가"),
+    종류: select("일정"),
+    날짜: dateProp("2026-08-01T06:00:00.000+09:00"),
+  });
+  const 어제일정 = page("old", {
+    이름: title("어제 일"),
+    종류: select("일정"),
+    날짜: dateProp("2026-07-31T06:00:00.000+09:00"),
+  });
+
+  // 노션이 범위 필터로 두 건 다 돌려줘도, 워커가 날짜별로 정확히 갈라야 한다.
+  const run = async (dateStr) => {
+    const stub = stubFetch(() => jsonRes({ results: [가족휴가, 어제일정], has_more: false }));
+    try {
+      const res = await worker.fetch(new Request(`https://w.dev/today?date=${dateStr}`), ENV);
+      return (await res.json()).special_items.map((i) => i.text);
+    } finally {
+      stub.restore();
+    }
+  };
+
+  return Promise.all([run("2026-08-01"), run("2026-07-31")]).then(([sat, fri]) => {
+    assert.deepEqual(sat, ["가족 휴가"], "8/1 06:00 일정은 8/1에 나와야 한다");
+    assert.deepEqual(fri, ["어제 일"], "7/31 조회에 8/1 일정이 섞이면 안 된다");
+  });
+});
+
+test("날짜만 있고 시각이 없는 항목(소설 일정 등)도 그대로 동작한다", async () => {
+  const stub = stubFetch((url) => {
+    const dbId = url.match(/databases\/([^/]+)\/query/)[1];
+    if (dbId !== "db-novel") return jsonRes({ results: [], has_more: false });
+    return jsonRes({
+      results: [
+        page("n1", { 이름: title("EP 4"), 작품: select("호위기사"), 유형: select("트리트먼트"), 날짜: dateProp("2026-08-01") }),
+        page("n2", { 이름: title("46화"), 작품: select("챌린지"), 유형: select("초고"), 날짜: dateProp("2026-08-02") }),
+      ],
+      has_more: false,
+    });
+  });
+  try {
+    const res = await worker.fetch(new Request("https://w.dev/today?date=2026-08-01"), ENV);
+    assert.deepEqual((await res.json()).novel_items.map((i) => i.text), ["EP 4"]);
   } finally {
     stub.restore();
   }

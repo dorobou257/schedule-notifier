@@ -63,11 +63,32 @@ function shiftDate(dateStr, days) {
   return d.toISOString().slice(0, 10);
 }
 
+/** 노션 date 속성의 시작 날짜(원본 문자열의 앞 10글자 = 입력한 그대로의 날짜). */
+function startDateOf(page, prop = "날짜") {
+  return (page.properties?.[prop]?.date?.start || "").slice(0, 10);
+}
+
+/**
+ * 해당 날짜의 페이지들을 가져온다.
+ *
+ * 노션의 date 필터는 타임스탬프를 UTC로 비교한다. 그래서 `equals: "2026-08-01"`은
+ * 8월 1일 06:00(KST) 항목을 놓친다 — UTC로는 7월 31일 21:00이기 때문이다.
+ * (한국 시각 오전 9시 이전이 붙은 일정이 전부 하루 전으로 밀렸다.)
+ * 그래서 앞뒤로 넉넉한 범위를 받아온 뒤, 노션이 돌려준 원본 문자열의 날짜
+ * 부분으로 직접 고른다 — 타임존 해석에 의존하지 않는다.
+ */
 async function queryDatabase(env, databaseId, dateStr) {
   const results = [];
   let cursor;
   do {
-    const body = { filter: { property: "날짜", date: { equals: dateStr } } };
+    const body = {
+      filter: {
+        and: [
+          { property: "날짜", date: { on_or_after: shiftDate(dateStr, -1) } },
+          { property: "날짜", date: { before: shiftDate(dateStr, 2) } },
+        ],
+      },
+    };
     if (cursor) body.start_cursor = cursor;
     const res = await fetch(`${NOTION_API}/databases/${databaseId}/query`, {
       method: "POST",
@@ -82,7 +103,7 @@ async function queryDatabase(env, databaseId, dateStr) {
     results.push(...(data.results || []));
     cursor = data.has_more ? data.next_cursor : null;
   } while (cursor);
-  return results;
+  return results.filter((p) => startDateOf(p) === dateStr);
 }
 
 // --- 노션 속성 읽기 (notify.py의 get_* 함수들과 같은 규칙) -----------------

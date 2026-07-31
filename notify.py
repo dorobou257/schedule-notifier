@@ -50,10 +50,34 @@ def today_kst() -> datetime:
     return datetime.now(KST)
 
 
+def shift_date(date_str: str, days: int) -> str:
+    return (datetime.strptime(date_str, "%Y-%m-%d") + timedelta(days=days)).strftime("%Y-%m-%d")
+
+
+def start_date_of(page: dict, prop_name: str = "날짜") -> str:
+    """노션 date 속성의 시작 날짜(원본 문자열 앞 10글자 = 입력한 그대로의 날짜)."""
+    date_info = page["properties"].get(prop_name, {}).get("date") or {}
+    return (date_info.get("start") or "")[:10]
+
+
 def query_database(database_id: str, date_str: str) -> list:
-    """해당 날짜(date_str, YYYY-MM-DD)에 해당하는 페이지들을 모두 가져온다."""
+    """해당 날짜(date_str, YYYY-MM-DD)에 해당하는 페이지들을 모두 가져온다.
+
+    노션의 date 필터는 타임스탬프를 UTC로 비교한다. 그래서 equals로 물으면
+    8월 1일 06:00(KST) 항목을 놓친다 — UTC로는 7월 31일 21:00이기 때문이다.
+    (한국 시각 오전 9시 이전이 붙은 일정이 전부 하루 전으로 밀렸다.)
+    앞뒤로 넉넉히 받아온 뒤 원본 문자열의 날짜로 직접 고른다 — 타임존 해석에
+    의존하지 않는다. worker/src/index.js의 queryDatabase도 같은 방식이다.
+    """
     url = f"{NOTION_API}/databases/{database_id}/query"
-    payload = {"filter": {"property": "날짜", "date": {"equals": date_str}}}
+    payload = {
+        "filter": {
+            "and": [
+                {"property": "날짜", "date": {"on_or_after": shift_date(date_str, -1)}},
+                {"property": "날짜", "date": {"before": shift_date(date_str, 2)}},
+            ]
+        }
+    }
     results = []
     while True:
         resp = requests.post(url, headers=HEADERS, json=payload)
@@ -63,7 +87,7 @@ def query_database(database_id: str, date_str: str) -> list:
         if not data.get("has_more"):
             break
         payload["start_cursor"] = data["next_cursor"]
-    return results
+    return [p for p in results if start_date_of(p) == date_str]
 
 
 def get_title(page: dict, prop_name: str = "이름") -> str:
