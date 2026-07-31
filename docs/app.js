@@ -46,6 +46,13 @@ function el(tag, props = {}, children = []) {
   return node;
 }
 
+/** "집필" → "집필로", "작업" → "작업으로". 받침이 없거나 ㄹ이면 "로"가 붙는다. */
+function josaRo(word) {
+  const last = word.charCodeAt(word.length - 1) - 0xac00;
+  const jong = last >= 0 && last <= 11171 ? last % 28 : -1;
+  return word + (jong === 0 || jong === 8 ? "로" : "으로");
+}
+
 function formatDuration(mins) {
   const m = Math.round(mins);
   const h = Math.floor(m / 60);
@@ -82,6 +89,10 @@ function defaultStore() {
     blocks: BASE_BLOCKS.map((b) => ({ ...b })),
     presets: {},
     today: emptySleep(),
+    // 그날 하루만 적용되는 손질. 날짜가 바뀌면 통째로 비운다.
+    //   categories[blockId]: 오늘만 이 블록을 다른 성격으로 취급(집필↔작업)
+    //   showRoutine: 특별 일정이 있는 날에도 루틴을 펼쳐서 볼지
+    dayTweaks: { date: null, categories: {}, showRoutine: false },
     // 소설 일정 ↔ 집필 블록 배정. map[blockId] = 소설 항목 키(사용자가 직접 지정),
     // excluded = 어디에도 배정하지 않기로 한 항목 키들. 둘 다 해당 없는 항목은
     // 남은 집필 블록에 순서대로 자동 배정된다. 날짜가 바뀌면 통째로 비운다.
@@ -103,6 +114,14 @@ function migrate(parsed) {
     blocks: Array.isArray(parsed.blocks) && parsed.blocks.length ? parsed.blocks : base.blocks,
     presets: parsed.presets && typeof parsed.presets === "object" ? parsed.presets : {},
     today: parsed.today && typeof parsed.today === "object" ? { ...emptySleep(), ...parsed.today } : base.today,
+    dayTweaks:
+      parsed.dayTweaks && typeof parsed.dayTweaks.categories === "object"
+        ? {
+            date: parsed.dayTweaks.date || null,
+            categories: parsed.dayTweaks.categories,
+            showRoutine: !!parsed.dayTweaks.showRoutine,
+          }
+        : base.dayTweaks,
     novelAssign:
       parsed.novelAssign && typeof parsed.novelAssign.map === "object"
         ? {
@@ -166,6 +185,11 @@ function rolloverIfStale(now) {
     store.novelAssign = { date: todayKey, map: {}, excluded: [] };
     saveStore(true);
   }
+  // 집필↔작업 교체도 오늘 하루짜리 — 내일은 원래 루틴으로 돌아간다.
+  if (store.dayTweaks.date !== todayKey) {
+    store.dayTweaks = { date: todayKey, categories: {}, showRoutine: false };
+    saveStore(true);
+  }
 }
 
 // ---------------------------------------------------------------
@@ -214,7 +238,13 @@ function computeForToday(now, protectedIds) {
   const wakeMinutes = getWakeMinutes(dayBoundaryHour, now);
   const sleepMinutes = getSleepOverrideMinutes(now, dayBoundaryHour);
   const overrides = protectedIds || new Set(store.today.protectedOverrides || []);
-  const blocks = store.blocks.map((b) => (overrides.has(b.id) ? { ...b, protected: true } : b));
+  // 오늘만 성격을 바꾼 블록(집필↔작업)을 여기서 갈아끼운다 — 루틴 자체는 건드리지 않는다.
+  const swaps = store.dayTweaks.categories || {};
+  const blocks = store.blocks.map((b) => {
+    const category = swaps[b.id] && swaps[b.id] !== b.category ? swaps[b.id] : null;
+    if (!overrides.has(b.id) && !category) return b;
+    return { ...b, ...(overrides.has(b.id) ? { protected: true } : {}), ...(category ? { category } : {}) };
+  });
   const settings = {
     ...store.settings,
     dropBreakfastWhenLate: overrides.has("breakfast") ? false : store.settings.dropBreakfastWhenLate,
@@ -420,9 +450,26 @@ function renderMain(now) {
     app.appendChild(renderPendingSleepBanner());
   }
 
+  // 노션에 종류="일정"으로 등록한 날은 그날 하루를 통째로 그 일정에 내주는 게
+  // 기본이다(루틴 숨김). 다만 그런 날에도 루틴을 참고하고 싶을 때가 있으니
+  // 직접 펼쳐볼 수 있게 해둔다 — 어디까지나 내가 꺼낼 때만.
   const special = d.special_items || [];
   if (special.length) {
     app.appendChild(renderSpecialScheduleCard(special, now));
+    const toggle = el("button", {
+      className: "routine-toggle",
+      textContent: store.dayTweaks.showRoutine ? "루틴 숨기기" : "그래도 루틴 보기",
+    });
+    toggle.addEventListener("click", () => {
+      store.dayTweaks.showRoutine = !store.dayTweaks.showRoutine;
+      saveStore(true);
+      renderMain(new Date());
+    });
+    app.appendChild(toggle);
+    if (store.dayTweaks.showRoutine) {
+      app.appendChild(renderNowCard(now));
+      app.appendChild(renderAgenda(now));
+    }
   } else {
     app.appendChild(renderNowCard(now));
     app.appendChild(renderAgenda(now));
@@ -517,14 +564,13 @@ function renderSpecialScheduleCard(items, now) {
 // 보이게 한다. 기본은 순서대로 자동 배정이고, 사용자가 지정하면 그게 이긴다.
 // ---------------------------------------------------------------
 
-/** 오늘 실제로 시간이 배정된 집필 블록들(시간순). */
-function writeBlocksOf(blocks) {
-  return blocks.filter((b) => b.category === "집필" && b.minutes > 0);
+/** 오늘 실제로 시간이 배정된 해당 성격의 블록들(시간순). */
+function blocksOfCategory(blocks, category) {
+  return blocks.filter((b) => b.category === category && b.minutes > 0);
 }
 
-// 집필 블록에 붙일 수 있는 소설 유형. 실제로 원고를 쓰는 단계만 해당한다 —
-// 트리트먼트/시놉시스/설정/연재는 노션에서 확인만 하면 되는 일이라
-// 집필 시간을 차지하면 안 된다.
+// 실제로 원고를 쓰는 단계만 "집필"에 붙는다. 트리트먼트/시놉시스/설정/연재는
+// 자료를 보거나 올리는 일에 가까우니 "작업"으로 간다.
 const WRITING_STAGES = new Set(["초고", "퇴고"]);
 
 /** 소설 항목의 유형(tags = [작품, 유형])이 집필 단계인지. */
@@ -532,32 +578,46 @@ function isWritingStage(item) {
   return WRITING_STAGES.has((item.tags || [])[1] || "");
 }
 
-/** @returns {Map<string, object>} blockId → 소설 항목 */
-function resolveNovelAssignments(blocks, allNovelItems) {
-  const novelItems = allNovelItems.filter(isWritingStage);
+/** 이 소설 항목이 붙을 수 있는 블록 성격. */
+function targetCategoryOf(item) {
+  return isWritingStage(item) ? "집필" : "작업";
+}
+
+/** 한 성격 안에서 블록당 1건씩 채운다. 블록보다 항목이 많으면 남는 건 배정되지 않는다. */
+function assignInto(result, targetBlocks, items) {
   const map = store.novelAssign.map || {};
   const excluded = new Set(store.novelAssign.excluded || []);
-  const byKey = new Map(novelItems.map((it) => [novelKey(it), it]));
-  const result = new Map();
+  const byKey = new Map(items.map((it) => [novelKey(it), it]));
   const used = new Set();
-  const writeBlocks = writeBlocksOf(blocks);
 
   // 1) 사용자가 직접 지정한 것부터.
-  for (const b of writeBlocks) {
+  for (const b of targetBlocks) {
     const key = map[b.id];
     if (key && byKey.has(key)) {
       result.set(b.id, byKey.get(key));
       used.add(key);
     }
   }
-  // 2) 남은 항목을 아직 비어 있는 집필 블록에 순서대로 채운다.
+  // 2) 남은 항목을 아직 비어 있는 블록에 순서대로 채운다.
   //    "배정 해제"한 항목(excluded)은 자동 배정에서도 제외된다.
-  const rest = novelItems.filter((it) => !used.has(novelKey(it)) && !excluded.has(novelKey(it)));
+  const rest = items.filter((it) => !used.has(novelKey(it)) && !excluded.has(novelKey(it)));
   let i = 0;
-  for (const b of writeBlocks) {
+  for (const b of targetBlocks) {
     if (result.has(b.id)) continue;
     if (i >= rest.length) break;
     result.set(b.id, rest[i++]);
+  }
+}
+
+/** @returns {Map<string, object>} blockId → 소설 항목 */
+function resolveNovelAssignments(blocks, novelItems) {
+  const result = new Map();
+  for (const category of ["집필", "작업"]) {
+    assignInto(
+      result,
+      blocksOfCategory(blocks, category),
+      novelItems.filter((it) => targetCategoryOf(it) === category)
+    );
   }
   return result;
 }
@@ -666,9 +726,14 @@ function renderAgenda(now) {
     if (realIdx === currentIdx) li.classList.add("is-current");
     else if (b.end <= nowMinutes) li.classList.add("is-past");
     if (reordering && fixed) li.classList.add("is-locked");
+    // 오늘만 성격을 바꾼 블록인지 — 꾹 눌러 집필↔작업을 맞바꾼 경우.
+    const swapped = !!store.dayTweaks.categories[b.id];
+    if (swapped) li.classList.add("is-swapped");
+    if (!reordering && (b.category === "집필" || b.category === "작업")) li.dataset.swappable = "1";
     li.appendChild(el("span", { className: "agenda__time mono", textContent: boundaryMinutesToHHMM(b.start, dayBoundaryHour) }));
     const body = el("div", { className: "agenda__body" });
     body.appendChild(el("span", { className: "agenda__name", textContent: b.name }));
+    if (swapped) body.appendChild(el("span", { className: "agenda__swap", textContent: `오늘만 ${b.category}` }));
     const novel = state.novelAssignments.get(b.id);
     if (novel) body.appendChild(el("span", { className: "agenda__novel", textContent: novelLabel(novel) }));
     li.appendChild(body);
@@ -693,7 +758,12 @@ function renderAgenda(now) {
     wrap.appendChild(
       el("p", { className: "agenda__hint", textContent: "블록을 꾹 눌러 끌면 순서가 바뀝니다. 기상·점심·취침은 고정입니다." })
     );
-  } else if (blocks.length > upcomingCount) {
+  } else {
+    // 순서 편집이 아닐 때의 꾹 누르기 — 집필↔작업을 오늘만 맞바꾼다.
+    enableLongPress(ul, 'li.agenda__row[data-swappable="1"]', (li) => openCategorySwapSheet(li.dataset.id));
+  }
+
+  if (!reordering && blocks.length > upcomingCount) {
     const toggle = el("button", {
       className: "agenda__toggle",
       textContent: state.agendaExpanded ? "접기" : "전체 보기",
@@ -762,10 +832,9 @@ function notionRow(item, sectionType) {
   body.appendChild(el("span", { className: "text", textContent: item.text || "" }));
   li.appendChild(body);
 
-  // 초고·퇴고만 집필 블록에 붙는다. 트리트먼트/시놉시스/설정/연재는 목록에
-  // 그대로 보이되 배정 대상이 아니라 버튼도 달지 않는다.
-  if (sectionType === "novel" && isWritingStage(item)) {
-    // 이 소설 일정이 어느 집필 블록에 배정됐는지 보여주고, 눌러서 바꾼다.
+  if (sectionType === "novel") {
+    // 이 소설 일정이 어느 블록에 배정됐는지 보여주고, 눌러서 바꾼다.
+    // 초고·퇴고는 집필 블록으로, 나머지 유형은 작업 블록으로 간다.
     const key = novelKey(item);
     let assignedTo = null;
     for (const [blockId, it] of state.novelAssignments) {
@@ -784,10 +853,11 @@ function notionRow(item, sectionType) {
   return li;
 }
 
-/** 소설 항목 하나를 어느 집필 블록에 붙일지 고르는 시트. */
+/** 소설 항목 하나를 어느 블록에 붙일지 고르는 시트. 유형에 맞는 성격의 블록만 보여준다. */
 function openNovelAssignSheet(item) {
   const key = novelKey(item);
-  const blocks = writeBlocksOf(state.computed.blocks);
+  const category = targetCategoryOf(item);
+  const blocks = blocksOfCategory(state.computed.blocks, category);
   const dayBoundaryHour = store.settings.dayBoundaryHour;
 
   const list = el("ul", { className: "rows" });
@@ -824,7 +894,12 @@ function openNovelAssignSheet(item) {
   });
 
   if (!blocks.length) {
-    list.appendChild(el("li", { className: "empty", textContent: "오늘은 집필 블록이 없습니다." }));
+    list.appendChild(
+      el("li", {
+        className: "empty",
+        textContent: `오늘은 ${category} 블록이 없습니다. 다른 블록을 꾹 눌러 ${category}으로 바꿀 수 있습니다.`,
+      })
+    );
   }
 
   const clearBtn = el("button", { className: "btn btn--ghost", textContent: "배정 해제" });
@@ -832,7 +907,7 @@ function openNovelAssignSheet(item) {
   const cancelBtn = el("button", { className: "btn btn--ghost", textContent: "닫기" });
   cancelBtn.addEventListener("click", closeSheet);
 
-  openSheet("집필 블록에 배정", novelLabel(item), [list], [clearBtn, cancelBtn]);
+  openSheet(`${category} 블록에 배정`, novelLabel(item), [list], [clearBtn, cancelBtn]);
 }
 
 // ---------------------------------------------------------------
@@ -1302,6 +1377,89 @@ function scrollParentOf(el) {
     if ((oy === "auto" || oy === "scroll") && p.scrollHeight > p.clientHeight) return p;
   }
   return document.scrollingElement || document.documentElement;
+}
+
+// 순서 편집이 아닐 때의 "꾹 누르기". 드래그(300ms)보다 조금 길게 잡아
+// 실수로 발동하지 않게 한다. 8px 넘게 움직이면 스크롤로 보고 취소.
+function enableLongPress(listEl, itemSelector, onLongPress) {
+  let target = null;
+  let startY = 0;
+  let timer = null;
+  let pointerId = null;
+
+  function cancel() {
+    clearTimeout(timer);
+    if (target) target.classList.remove("pressing");
+    target = null;
+  }
+
+  listEl.addEventListener("pointerdown", (e) => {
+    if (target) return;
+    const li = e.target.closest(itemSelector);
+    if (!li || !listEl.contains(li)) return;
+    target = li;
+    startY = e.clientY;
+    pointerId = e.pointerId;
+    li.classList.add("pressing");
+    timer = setTimeout(() => {
+      const hit = target;
+      target = null;
+      hit.classList.remove("pressing");
+      buzz(12);
+      onLongPress(hit);
+    }, 450);
+  });
+
+  listEl.addEventListener("pointermove", (e) => {
+    if (target && e.pointerId === pointerId && Math.abs(e.clientY - startY) > 8) cancel();
+  });
+  listEl.addEventListener("pointerup", cancel);
+  listEl.addEventListener("pointercancel", cancel);
+}
+
+/** 오늘 하루만 이 블록의 성격을 집필↔작업으로 맞바꾸는 시트. 루틴 자체는 그대로 둔다. */
+function openCategorySwapSheet(blockId) {
+  const b = state.computed.blocks.find((x) => x.id === blockId);
+  if (!b) return;
+  const other = b.category === "집필" ? "작업" : "집필";
+  const original = (store.blocks.find((x) => x.id === blockId) || {}).category;
+
+  const apply = (category) => {
+    const categories = { ...store.dayTweaks.categories };
+    if (category === original) delete categories[blockId];
+    else categories[blockId] = category;
+    store.dayTweaks = { ...store.dayTweaks, categories };
+    saveStore(true);
+    closeSheet();
+    renderShell();
+  };
+
+  const swapped = !!store.dayTweaks.categories[blockId];
+  const actions = [];
+  if (swapped) {
+    // 이미 바꿔놓은 블록 — 원래대로 돌리는 것 하나면 된다(둘은 같은 동작이다).
+    const resetBtn = el("button", { className: "btn btn--primary", textContent: `${josaRo(original)} 되돌리기` });
+    resetBtn.addEventListener("click", () => apply(original));
+    actions.push(resetBtn);
+  } else {
+    const swapBtn = el("button", { className: "btn btn--primary", textContent: `오늘만 ${josaRo(other)}` });
+    swapBtn.addEventListener("click", () => apply(other));
+    actions.push(swapBtn);
+  }
+  const cancelBtn = el("button", { className: "btn btn--ghost", textContent: "닫기" });
+  cancelBtn.addEventListener("click", closeSheet);
+  actions.push(cancelBtn);
+
+  const info = el("p", {
+    className: "sheet-note",
+    textContent: `오늘 하루만 바뀌고 내일은 원래 루틴(${original})으로 돌아갑니다. 소설 일정도 규칙에 맞춰 다시 배정됩니다.`,
+  });
+  openSheet(
+    b.name,
+    `${boundaryMinutesToHHMM(b.start, store.settings.dayBoundaryHour)} · 지금은 ${b.category}`,
+    [info],
+    actions
+  );
 }
 
 // 노션식 드래그 재배열: 300ms 길게 누르면 드래그 모드로 들어가고,
