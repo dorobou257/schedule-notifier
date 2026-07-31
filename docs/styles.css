@@ -117,7 +117,8 @@ main{ padding:2px 16px 8px; display:flex; flex-direction:column; gap:14px; }
 
 /* ---------- 다음 일정 목록 ---------- */
 .agenda{ background:var(--surface); border:1px solid var(--rule); border-radius:16px; padding:6px 4px; box-shadow:var(--shadow); }
-.agenda__head{ display:flex; align-items:center; padding:12px 14px 6px; }
+.agenda__head{ display:flex; align-items:center; gap:8px; padding:12px 14px 6px; }
+.agenda__head .spacer{ flex:1; }
 .agenda__head h2{ margin:0; font-size:13px; font-weight:800; color:var(--faint); letter-spacing:.06em; text-transform:uppercase; }
 ul.agenda__list{ margin:0; padding:0 6px; list-style:none; }
 li.agenda__row{
@@ -139,6 +140,33 @@ button.agenda__toggle{
   color:var(--muted); font-size:13px; font-weight:700; cursor:pointer; border-radius:8px;
 }
 button.agenda__toggle:active{ background:var(--surface-2); }
+
+/* 순서 편집 모드 — 루틴 편집 시트를 열지 않고 여기서 바로 드래그한다. */
+button.agenda__reorder{
+  display:flex; align-items:center; gap:5px; padding:5px 10px; border:1px solid var(--rule);
+  background:none; color:var(--muted); font-size:12px; font-weight:700; border-radius:99px; cursor:pointer;
+}
+button.agenda__reorder.is-on{ background:var(--surface-2); color:var(--ink); border-color:transparent; }
+ul.agenda__list.is-reordering li.agenda__row{
+  margin:4px 0; padding:12px 10px 12px 12px; background:var(--surface-2); border-radius:10px;
+  user-select:none; -webkit-user-select:none; -webkit-touch-callout:none;
+  touch-action:pan-y;
+  transition:transform 150ms ease, box-shadow 150ms ease, opacity 150ms ease;
+}
+/* 진행 상황 표시(지난 블록 흐리게)는 순서를 볼 땐 오히려 방해가 된다. */
+ul.agenda__list.is-reordering li.agenda__row.is-past{ opacity:1; }
+ul.agenda__list.is-reordering li.agenda__row.is-locked{ background:none; opacity:.55; }
+li.agenda__row.pressing{ transform:scale(0.97); box-shadow:var(--shadow); }
+li.agenda__row.dragging{
+  box-shadow:var(--shadow); background:var(--surface); z-index:5; position:relative; cursor:grabbing;
+  will-change:transform;
+  transition:box-shadow 150ms ease, background 150ms ease;
+}
+.agenda__grip{ margin-left:auto; flex:none; color:var(--faint); display:flex; align-items:center; }
+.agenda__hint{ margin:8px 12px 4px; font-size:12px; color:var(--faint); line-height:1.5; }
+@media (prefers-reduced-motion: reduce){
+  ul.agenda__list.is-reordering li.agenda__row{ transition:none; }
+}
 
 /* ---------- 노션 연동 카드(오늘의 할일 / 오늘의 소설 일정) ---------- */
 section.card{
@@ -254,8 +282,7 @@ li.block-item[data-cat="rest"]{ border-left-color:var(--cat-rest); }
 /* 드래그가 시작되면 리스트 전체의 네이티브 세로 팬을 끈다. 이게 없으면
    브라우저가 스크롤/새로고침 제스처를 가져가버린다(JS의 비패시브
    touchmove preventDefault와 한 쌍 — app.js enableDragReorder 참고). */
-.is-dragging{ touch-action:none; }
-.is-dragging li.block-item{ touch-action:none; }
+.is-dragging, .is-dragging > *{ touch-action:none; }
 li.block-item.pressing{ transform:scale(0.97); box-shadow:var(--shadow); }
 li.block-item.dragging{
   box-shadow:var(--shadow); background:var(--surface-2); z-index:5; position:relative; cursor:grabbing;

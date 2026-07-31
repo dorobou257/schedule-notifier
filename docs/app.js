@@ -10,6 +10,7 @@ import {
   dateToBoundaryMinutes,
   logicalWeekday,
   logicalDateKey,
+  applyVisibleOrder,
 } from "./routine.js";
 
 const STORAGE_KEY = "schedule.v1";
@@ -205,6 +206,7 @@ const state = {
   todayData: null, // today.json 파싱 결과
   computed: null, // 마지막 computeForToday().result
   agendaExpanded: false,
+  agendaReorder: false, // 메인 화면 "오늘 하루"의 순서 편집 모드
   activeSheet: null, // null | 'proposal' | 'editor' | 'settings'
   proposalDismissed: false,
   editorBlocks: null, // 편집 시트 열려있는 동안의 작업 사본
@@ -420,29 +422,68 @@ function renderAgenda(now) {
   const blocks = state.computed.blocks;
   const currentIdx = findCurrentIndex(blocks, nowMinutes);
 
+  const reordering = state.agendaReorder;
+
   const wrap = el("div", { className: "agenda" });
   const head = el("div", { className: "agenda__head" });
   head.appendChild(el("h2", { textContent: "오늘 하루" }));
+  head.appendChild(el("span", { className: "spacer" }));
+  const reorderBtn = el("button", {
+    className: "agenda__reorder" + (reordering ? " is-on" : ""),
+    title: "순서 편집",
+  });
+  reorderBtn.innerHTML = `${ICONS.grip} <span>${reordering ? "완료" : "순서"}</span>`;
+  reorderBtn.addEventListener("click", () => {
+    state.agendaReorder = !state.agendaReorder;
+    // 순서를 바꾸려면 하루 전체가 보여야 한다.
+    if (state.agendaReorder) state.agendaExpanded = true;
+    renderMain(new Date());
+  });
+  head.appendChild(reorderBtn);
   wrap.appendChild(head);
 
-  const ul = el("ul", { className: "agenda__list" });
+  const ul = el("ul", { className: "agenda__list" + (reordering ? " is-reordering" : "") });
   const upcomingCount = 5;
   const startIdx = currentIdx === -1 ? 0 : currentIdx;
-  const visible = state.agendaExpanded ? blocks : blocks.slice(startIdx, startIdx + upcomingCount);
+  const visible = reordering || state.agendaExpanded ? blocks : blocks.slice(startIdx, startIdx + upcomingCount);
 
   visible.forEach((b) => {
     const realIdx = blocks.indexOf(b);
-    const li = el("li", { className: "agenda__row", dataset: { cat: ROUTINE_CAT[b.category] || "other" } });
+    // 기상/취침/시각 고정(점심)은 하루의 뼈대라 순서를 바꿀 수 없다 — 다른
+    // 블록이 이 지점을 넘어가지도 못하게 "벽"으로 표시한다(enableDragReorder).
+    const fixed = b.anchor === "wake" || b.anchor === "sleep" || b.anchor === "clock";
+    const li = el("li", {
+      className: "agenda__row",
+      dataset: { cat: ROUTINE_CAT[b.category] || "other", id: b.id, ...(fixed ? { fixed: "1" } : {}) },
+    });
     if (b.minutes === 0 && b.anchor !== "wake" && b.anchor !== "sleep") li.classList.add("is-removed");
     if (realIdx === currentIdx) li.classList.add("is-current");
     else if (b.end <= nowMinutes) li.classList.add("is-past");
+    if (reordering && fixed) li.classList.add("is-locked");
     li.appendChild(el("span", { className: "agenda__time mono", textContent: boundaryMinutesToHHMM(b.start, dayBoundaryHour) }));
     li.appendChild(el("span", { className: "agenda__name", textContent: b.name }));
+    if (reordering && !fixed) li.appendChild(el("span", { className: "agenda__grip", innerHTML: ICONS.grip }));
     ul.appendChild(li);
   });
   wrap.appendChild(ul);
 
-  if (blocks.length > upcomingCount) {
+  if (reordering) {
+    enableDragReorder(
+      ul,
+      (order) => {
+        store.blocks = applyVisibleOrder(store.blocks, order);
+        saveStore(true);
+        // 안착 애니메이션이 끝난 뒤에 다시 그린다 — 곧바로 갈아끼우면
+        // 블록이 제자리로 스르륵 돌아가는 모습이 잘려버린다.
+        setTimeout(() => renderShell(), 200);
+      },
+      () => {},
+      "li.agenda__row"
+    );
+    wrap.appendChild(
+      el("p", { className: "agenda__hint", textContent: "블록을 꾹 눌러 끌면 순서가 바뀝니다. 기상·점심·취침은 고정입니다." })
+    );
+  } else if (blocks.length > upcomingCount) {
     const toggle = el("button", {
       className: "agenda__toggle",
       textContent: state.agendaExpanded ? "접기" : "전체 보기",
@@ -504,6 +545,9 @@ function notionRow(item, sectionType) {
 let tickTimer = null;
 
 function updateNowCard() {
+  // 드래그로 순서를 바꾸는 중이라면 화면을 갈아끼우면 안 된다 — 잡고 있던
+  // 요소가 통째로 사라져 드래그가 끊긴다. 다음 틱에서 따라잡는다.
+  if (dragActive) return;
   if (!state.nowCardEls) {
     // 블록 경계를 넘었을 수 있으니(예: 다음 블록으로 진입) 전체를 다시 그린다.
     renderMain(new Date());
@@ -939,6 +983,9 @@ function selectField(options, current) {
   return select;
 }
 
+// 드래그가 진행 중인 동안엔 1분 틱의 자동 렌더를 멈춘다(updateNowCard 참고).
+let dragActive = false;
+
 const REDUCED_MOTION = () => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
 /** 짧은 진동 피드백. 지원하지 않는 브라우저(iOS Safari 등)에서는 조용히 무시된다. */
@@ -1058,6 +1105,7 @@ function enableDragReorder(listEl, onReorder, onTap, itemSelector = "li.block-it
   }
 
   function cleanupVisual() {
+    dragActive = false;
     listEl.classList.remove("is-dragging");
     stopAutoScroll();
     if (!dragEl) return;
@@ -1077,6 +1125,7 @@ function enableDragReorder(listEl, onReorder, onTap, itemSelector = "li.block-it
     dragEl.classList.add("pressing");
     pressTimer = setTimeout(() => {
       dragging = true;
+      dragActive = true;
       originalOrder = items();
       dragEl.classList.remove("pressing");
       dragEl.classList.add("dragging");

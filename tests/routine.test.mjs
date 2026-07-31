@@ -10,6 +10,7 @@ import {
   dateToBoundaryMinutes,
   logicalWeekday,
   logicalDateKey,
+  applyVisibleOrder,
 } from "../docs/routine.js";
 
 const MON = 0; // 월요일 (notify.py 규칙: 월=0 … 일=6). 운동(월/수/금) 활성일.
@@ -231,4 +232,56 @@ test("dateToBoundaryMinutes / logicalWeekday: 자정 넘긴 새벽엔 전날로 
 
   assert.equal(logicalDateKey(lateNight), "2026-07-29");
   assert.equal(logicalDateKey(morning), "2026-07-30");
+});
+
+// ---------------------------------------------------------------
+// applyVisibleOrder — 메인 화면에서 바꾼 순서를 전체 블록에 반영하기
+// ---------------------------------------------------------------
+
+const ids = (blocks) => blocks.map((b) => b.id);
+
+test("applyVisibleOrder: 전부 보이는 경우 그대로 새 순서가 된다", () => {
+  const blocks = [{ id: "a" }, { id: "b" }, { id: "c" }];
+  assert.deepEqual(ids(applyVisibleOrder(blocks, ["c", "a", "b"])), ["c", "a", "b"]);
+});
+
+test("applyVisibleOrder: 화면에 없는 블록은 원래 인덱스에 고정된다", () => {
+  // 화요일엔 운동(exercise)이 화면에 없다 — 3차 집필과 휴식만 자리를 바꿔도
+  // 운동은 원래 있던 자리(인덱스 1)에 그대로 있어야 한다.
+  const blocks = [{ id: "session3" }, { id: "exercise" }, { id: "rest" }];
+  const result = applyVisibleOrder(blocks, ["rest", "session3"]);
+  assert.deepEqual(ids(result), ["rest", "exercise", "session3"]);
+});
+
+test("applyVisibleOrder: 블록 객체는 새로 만들지 않고 그대로 옮긴다", () => {
+  const a = { id: "a", minutes: 30 };
+  const b = { id: "b", minutes: 60 };
+  const result = applyVisibleOrder([a, b], ["b", "a"]);
+  assert.equal(result[0], b);
+  assert.equal(result[1], a);
+});
+
+test("applyVisibleOrder: 원본 배열을 변형하지 않는다", () => {
+  const blocks = [{ id: "a" }, { id: "b" }];
+  applyVisibleOrder(blocks, ["b", "a"]);
+  assert.deepEqual(ids(blocks), ["a", "b"]);
+});
+
+test("applyVisibleOrder: 모르는 id나 중복은 무시한다", () => {
+  const blocks = [{ id: "a" }, { id: "b" }, { id: "c" }];
+  // DOM에서 온 값이라 신뢰할 수 없다 — 유효한 id만 순서대로 채우고
+  // 나머지 자리는 원래 블록이 유지되어야 한다.
+  assert.deepEqual(ids(applyVisibleOrder(blocks, ["c", "zzz", "c", "a"])), ["c", "b", "a"]);
+});
+
+test("applyVisibleOrder: 실제 BASE_BLOCKS에서 유동 블록만 뒤집어도 고정 앵커는 제자리", () => {
+  const visible = BASE_BLOCKS.map((b) => b.id);
+  // 1차 집필과 여유의 자리를 바꾼다.
+  const i = visible.indexOf("session1");
+  [visible[i], visible[i + 1]] = [visible[i + 1], visible[i]];
+  const result = ids(applyVisibleOrder(BASE_BLOCKS, visible));
+  assert.equal(result[0], "wake");
+  assert.equal(result[result.length - 1], "sleep");
+  assert.equal(result.indexOf("lunch"), BASE_BLOCKS.findIndex((b) => b.id === "lunch"));
+  assert.ok(result.indexOf("buffer") < result.indexOf("session1"));
 });

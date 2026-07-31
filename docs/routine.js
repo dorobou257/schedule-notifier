@@ -159,6 +159,27 @@ function expandBy(segment, priority, surplus) {
 }
 
 /**
+ * 화면에 보이는 블록들의 새 순서(visibleIds)를 전체 블록 순서에 반영한다.
+ *
+ * 메인 화면의 "오늘 하루"는 오늘 반복 대상인 블록만 보여준다(예: 화·목엔
+ * 운동이 없다). 거기서 순서를 바꿔도 화면에 없는 블록까지 같이 움직이면
+ * 안 되므로, "보이는 블록이 있던 자리"에만 새 순서를 순서대로 채우고
+ * 숨은 블록은 원래 인덱스에 그대로 둔다. 부작용 없는 순수 함수.
+ *
+ * @param {Array} blocks 전체 블록 배열(store.blocks)
+ * @param {string[]} visibleIds 화면에 보이던 블록들의 새 순서
+ */
+export function applyVisibleOrder(blocks, visibleIds) {
+  const byId = new Map(blocks.map((b) => [b.id, b]));
+  // 실제로 존재하는 id만, 중복 없이 — DOM에서 온 값이라 방어적으로 거른다.
+  const visibleSet = new Set(visibleIds.filter((id) => byId.has(id)));
+  const queue = [...visibleSet];
+
+  let cursor = 0;
+  return blocks.map((b) => (visibleSet.has(b.id) ? byId.get(queue[cursor++]) : b));
+}
+
+/**
  * 하루치 블록 목록을 실제 기상 시각에 맞춰 재배치한다. 부작용 없는 순수 함수.
  *
  * 핵심 아이디어: anchor:"clock"/"sleep" 블록을 경계로 하루를 세그먼트로
