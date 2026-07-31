@@ -251,9 +251,12 @@ function setStatus(text) {
   if (statusEl) statusEl.textContent = text || "";
 }
 
-async function fetchFromWorker() {
+// 날짜를 반드시 앱이 정해서 넘긴다. 이 앱의 하루는 dayBoundaryHour(기본 04:00)
+// 기준이라 새벽 0~4시엔 아직 "어제"인데, 워커에게 맡기면 달력 날짜를 쓰기 때문에
+// 루틴은 어제 것인데 할일·소설만 오늘 것이 뜨는 어긋남이 생긴다.
+async function fetchFromWorker(dateKey) {
   if (!WORKER_URL) return null;
-  const res = await fetch(`${WORKER_URL.replace(/\/$/, "")}/today`, { cache: "no-store" });
+  const res = await fetch(`${WORKER_URL.replace(/\/$/, "")}/today?date=${dateKey}`, { cache: "no-store" });
   if (!res.ok) throw new Error("worker " + res.status);
   return res.json();
 }
@@ -261,10 +264,11 @@ async function fetchFromWorker() {
 async function loadTodayJson(isRefresh) {
   const btn = document.getElementById("refresh-btn");
   if (isRefresh && btn) btn.classList.add("spin");
+  const dateKey = logicalDateKey(new Date(), store.settings.dayBoundaryHour);
   try {
     let data = null;
     try {
-      data = await fetchFromWorker();
+      data = await fetchFromWorker(dateKey);
     } catch {
       data = null; // 워커가 죽었거나 오프라인 — 아래 today.json으로 내려간다
     }
@@ -375,7 +379,11 @@ function renderShell() {
 
 function renderHeader(now) {
   const d = state.todayData || {};
-  document.getElementById("date-label").textContent = d.date || `${now.getMonth() + 1}월 ${now.getDate()}일`;
+  // 노션이 준 "2026-07-31"을 그대로 걸어두면 지금이 며칠인지 한눈에 안 들어온다.
+  const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d.date || "");
+  document.getElementById("date-label").textContent = iso
+    ? `${Number(iso[2])}월 ${Number(iso[3])}일`
+    : d.date || `${now.getMonth() + 1}월 ${now.getDate()}일`;
   document.getElementById("weekday-label").textContent = d.weekday || WEEKDAY_NAMES[logicalWeekday(now, store.settings.dayBoundaryHour)];
 }
 
@@ -414,18 +422,21 @@ function renderMain(now) {
 
   const special = d.special_items || [];
   if (special.length) {
-    app.appendChild(renderSpecialScheduleCard(special));
+    app.appendChild(renderSpecialScheduleCard(special, now));
   } else {
     app.appendChild(renderNowCard(now));
     app.appendChild(renderAgenda(now));
   }
 
-  // 노션에서 이미 완료 처리한 항목은 화면에서 뺀다.
-  const todos = (d.todo_items || []).filter((it) => !it.done);
-  if (todos.length) {
-    app.appendChild(card(ICONS.check, "오늘의 할일", todos, "todo"));
+  // 노션에서 이미 완료 처리한 항목은 화면에서 뺀다. 다만 "원래 없었다"와
+  // "다 끝냈다"는 구분해서 보여줘야 오해가 없다(doneCount).
+  const allTodos = d.todo_items || [];
+  const todos = allTodos.filter((it) => !it.done);
+  if (allTodos.length) {
+    app.appendChild(card(ICONS.check, "오늘의 할일", todos, "todo", allTodos.length - todos.length));
   }
-  app.appendChild(card(ICONS.book, "오늘의 소설 일정", (d.novel_items || []).filter((it) => !it.done), "novel"));
+  const allNovels = d.novel_items || [];
+  app.appendChild(card(ICONS.book, "오늘의 소설 일정", activeNovels, "novel", allNovels.length - activeNovels.length));
 }
 
 function renderMorningBanner() {
@@ -471,7 +482,10 @@ function renderPendingSleepBanner() {
   return banner;
 }
 
-function renderSpecialScheduleCard(items) {
+function renderSpecialScheduleCard(items, now) {
+  const dayBoundaryHour = store.settings.dayBoundaryHour;
+  const nowMinutes = dateToBoundaryMinutes(now, dayBoundaryHour);
+
   const section = el("section", { className: "card" });
   const head = el("div", { className: "card-head" });
   head.appendChild(el("span", { className: "icon", innerHTML: ICONS.clock }));
@@ -481,7 +495,11 @@ function renderSpecialScheduleCard(items) {
   const ul = el("ul", { className: "rows" });
   items.forEach((it) => {
     const li = el("li", { className: "row" });
-    li.appendChild(el("span", { className: "chip-time mono" + (it.time ? "" : " empty"), textContent: it.time || "--" }));
+    // 이미 지난 시각이면 흐리게 — 표시가 없으면 한밤중에 "06:00 가족 휴가"가
+    // 내일 아침 일정처럼 읽힌다(실사용 중 실제로 겪은 혼란).
+    const time = (it.time || "").trim();
+    if (time && hhmmToBoundaryMinutes(time, dayBoundaryHour) < nowMinutes) li.classList.add("is-past");
+    li.appendChild(el("span", { className: "chip-time mono" + (time ? "" : " empty"), textContent: time || "--" }));
     const body = el("div", { className: "row-body" });
     body.appendChild(el("span", { className: "text", textContent: it.text || "" }));
     li.appendChild(body);
@@ -678,7 +696,7 @@ function renderAgenda(now) {
   return wrap;
 }
 
-function card(iconHtml, title, items, sectionType) {
+function card(iconHtml, title, items, sectionType, doneCount = 0) {
   const section = el("section", { className: "card" });
   const head = el("div", { className: "card-head" });
   head.appendChild(el("span", { className: "icon", innerHTML: iconHtml }));
@@ -690,6 +708,9 @@ function card(iconHtml, title, items, sectionType) {
     const ul = el("ul", { className: "rows" });
     items.forEach((it) => ul.appendChild(notionRow(it, sectionType)));
     section.appendChild(ul);
+  } else if (doneCount) {
+    // "아무것도 없음"과 "다 끝냄"은 전혀 다른 상황이다 — 구분해서 보여준다.
+    section.appendChild(el("p", { className: "empty is-done", textContent: `${doneCount}건 모두 완료했습니다.` }));
   } else {
     section.appendChild(el("p", { className: "empty", textContent: "등록된 항목이 없습니다." }));
   }

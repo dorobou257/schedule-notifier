@@ -228,6 +228,9 @@ li.row--pick{ cursor:pointer; }
 li.row--pick:active{ background:var(--surface-2); }
 
 p.empty{ margin:0; padding:10px 14px 14px; color:var(--faint); font-size:14px; }
+p.empty.is-done{ color:var(--pine-ink); font-weight:700; }
+li.row.is-past{ opacity:.45; }
+li.row.is-past .text{ text-decoration:line-through; }
 #status{ text-align:center; color:var(--faint); font-size:12px; padding:10px 0 0; }
 
 /* ---------- 하단 고정 취침 바 ---------- */
