@@ -94,6 +94,9 @@ def get_time(page: dict, prop_name: str = "날짜") -> str:
 
 WEEKDAY_NAMES = ["월요일", "화요일", "수요일", "목요일", "금요일", "토요일", "일요일"]
 
+# 노션 [일정]/[소설] DB의 완료 체크박스 속성 이름. 워커도 같은 이름을 쓴다.
+DONE_PROP = "완료"
+
 
 def build_today_data(date_str: str, weekday: int, schedule_pages: list, novel_pages: list) -> dict:
     holiday_pages = [p for p in schedule_pages if get_checkbox(p, "공휴일")]
@@ -105,13 +108,22 @@ def build_today_data(date_str: str, weekday: int, schedule_pages: list, novel_pa
     # 종류="일정"으로 노션에 직접 등록된 항목이 있으면 그날은 앱의 자동 루틴
     # 대신 이 목록을 그대로 보여준다(비어 있으면 프론트가 routine.js로 계산).
     # 각 항목에 노션 페이지 id를 함께 넘긴다 — 앱이 "이 소설 일정은 2차 집필에
-    # 배정" 같은 상태를 항목별로 기억하려면 안정적인 키가 필요하다.
+    # 배정" 같은 상태를 항목별로 기억하고, 체크박스를 눌러 노션의 그 페이지를
+    # 완료 처리하려면 안정적인 키가 필요하다(worker/src/index.js 참고).
+    # done은 노션의 "완료" 체크박스 — 이미 끝낸 항목은 앱이 화면에서 뺀다.
     special_items = [
-        {"id": p["id"], "time": get_time(p), "text": get_title(p)} for p in special_pages
+        {"id": p["id"], "time": get_time(p), "text": get_title(p), "done": get_checkbox(p, DONE_PROP)}
+        for p in special_pages
     ]
 
     todo_items = [
-        {"id": p["id"], "time": get_time(p), "tags": [get_select(p, "종류")], "text": get_title(p)}
+        {
+            "id": p["id"],
+            "time": get_time(p),
+            "tags": [get_select(p, "종류")],
+            "text": get_title(p),
+            "done": get_checkbox(p, DONE_PROP),
+        }
         for p in todo_pages
     ]
 
@@ -121,6 +133,7 @@ def build_today_data(date_str: str, weekday: int, schedule_pages: list, novel_pa
             "time": get_time(p),
             "tags": [get_select(p, "작품"), get_select(p, "유형")],
             "text": get_title(p),
+            "done": get_checkbox(p, DONE_PROP),
         }
         for p in novel_pages
     ]
@@ -154,16 +167,20 @@ def format_digest(data: dict) -> tuple[str, str]:
     if data.get("holiday_names"):
         lines.append("공휴일: " + ", ".join(data["holiday_names"]))
 
-    for item in data.get("special_items", []):
+    # 이미 완료 처리한 항목은 아침 알림에서도 뺀다.
+    def pending(items):
+        return [it for it in items if not it.get("done")]
+
+    for item in pending(data.get("special_items", [])):
         t = (item.get("time") or "").strip()
         lines.append(f"{t} {item['text']}".strip())
 
-    for item in data.get("todo_items", []):
+    for item in pending(data.get("todo_items", [])):
         tag = item["tags"][0] if item.get("tags") else ""
         prefix = f"[{tag}] " if tag else ""
         lines.append(f"할일 · {prefix}{item['text']}")
 
-    for item in data.get("novel_items", []):
+    for item in pending(data.get("novel_items", [])):
         label = " ".join(tag for tag in (item.get("tags") or []) if tag)
         prefix = f"[{label}] " if label else ""
         lines.append(f"소설 · {prefix}{item['text']}")

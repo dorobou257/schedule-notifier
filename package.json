@@ -4,6 +4,6 @@
   "type": "module",
   "description": "docs/*.js를 ES 모듈로 취급하기 위한 최소 매니페스트. npm install이 필요한 의존성은 없다.",
   "scripts": {
-    "test": "node --test tests/routine.test.mjs"
+    "test": "node --test tests/*.test.mjs"
   }
 }

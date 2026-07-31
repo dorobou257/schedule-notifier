@@ -1,10 +1,11 @@
-const SHELL_CACHE = "schedule-shell-v4";
+const SHELL_CACHE = "schedule-shell-v5";
 const SHELL_FILES = [
   "./",
   "./index.html",
   "./styles.css",
   "./routine.js",
   "./app.js",
+  "./config.js",
   "./manifest.json",
   "./icon-192.png",
   "./icon-512.png",

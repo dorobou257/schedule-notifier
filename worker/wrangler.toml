@@ -1,0 +1,10 @@
+name = "schedule-notion"
+main = "src/index.js"
+compatibility_date = "2026-07-01"
+
+# 비밀이 아닌 값만 여기 둔다. NOTION_TOKEN은 반드시 secret으로 넣을 것:
+#   npx wrangler secret put NOTION_TOKEN
+[vars]
+SCHEDULE_DB_ID = "15825ba2c8ef807b8e29dbe1e2491b2b"
+NOVEL_DB_ID = "21a25ba2c8ef808e97b9cf996c3347be"
+ALLOWED_ORIGIN = "https://dorobou257.github.io"

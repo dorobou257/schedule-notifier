@@ -12,6 +12,7 @@ import {
   logicalDateKey,
   applyVisibleOrder,
 } from "./routine.js";
+import { WORKER_URL } from "./config.js";
 
 const STORAGE_KEY = "schedule.v1";
 const WEEKDAY_NAMES = ["월요일", "화요일", "수요일", "목요일", "금요일", "토요일", "일요일"];
@@ -238,24 +239,119 @@ const state = {
 };
 
 // ---------------------------------------------------------------
-// today.json (노션 데이터) 불러오기 — 기존 앱과 동일한 방식.
+// 노션 데이터 불러오기.
+//
+// 워커 주소가 설정돼 있으면 노션을 직접 조회해 지금 상태를 그대로 받는다
+// (체크한 할일이 바로 사라진다). 워커가 없거나 실패하면 GitHub Actions가
+// 하루 한 번 만들어두는 today.json으로 폴백한다 — 오프라인에서도 열린다.
 // ---------------------------------------------------------------
+
+function setStatus(text) {
+  const statusEl = document.getElementById("status");
+  if (statusEl) statusEl.textContent = text || "";
+}
+
+async function fetchFromWorker() {
+  if (!WORKER_URL) return null;
+  const res = await fetch(`${WORKER_URL.replace(/\/$/, "")}/today`, { cache: "no-store" });
+  if (!res.ok) throw new Error("worker " + res.status);
+  return res.json();
+}
 
 async function loadTodayJson(isRefresh) {
   const btn = document.getElementById("refresh-btn");
-  const statusEl = document.getElementById("status");
   if (isRefresh && btn) btn.classList.add("spin");
   try {
-    const res = await fetch("./today.json?t=" + Date.now(), { cache: "no-store" });
-    state.todayData = await res.json();
-    if (statusEl) statusEl.textContent = "";
+    let data = null;
+    try {
+      data = await fetchFromWorker();
+    } catch {
+      data = null; // 워커가 죽었거나 오프라인 — 아래 today.json으로 내려간다
+    }
+    if (!data) {
+      const res = await fetch("./today.json?t=" + Date.now(), { cache: "no-store" });
+      data = await res.json();
+    }
+    state.todayData = data;
+    setStatus(WORKER_URL && data.source !== "worker" ? "노션에 연결하지 못해 마지막 저장본을 보여드립니다." : "");
   } catch (e) {
-    if (statusEl) statusEl.textContent = "새 데이터를 불러오지 못했습니다. 이전 화면을 보여드립니다.";
+    setStatus("새 데이터를 불러오지 못했습니다. 이전 화면을 보여드립니다.");
     if (!state.todayData) state.todayData = {};
   } finally {
     if (btn) setTimeout(() => btn.classList.remove("spin"), 600);
   }
+  flushPendingChecks();
   renderShell();
+}
+
+// ---------------------------------------------------------------
+// 체크박스 → 노션 반영. 화면은 먼저 바꾸고(낙관적 갱신) 실패하면 되돌린다.
+// 오프라인이면 큐에 쌓아두고 다음에 앱을 열 때 몰아서 보낸다.
+// ---------------------------------------------------------------
+
+const PENDING_KEY = "schedule.pendingChecks";
+
+function readPending() {
+  try {
+    const raw = localStorage.getItem(PENDING_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function writePending(list) {
+  try {
+    localStorage.setItem(PENDING_KEY, JSON.stringify(list));
+  } catch {
+    /* 저장 불가 — 이번 세션 안에서만 잃는다 */
+  }
+}
+
+function queuePending(id, done) {
+  const list = readPending().filter((p) => p.id !== id);
+  list.push({ id, done });
+  writePending(list);
+}
+
+async function patchNotion(id, done) {
+  const res = await fetch(`${WORKER_URL.replace(/\/$/, "")}/item`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id, done }),
+  });
+  if (!res.ok) throw new Error("patch " + res.status);
+}
+
+/** 밀린 체크를 순서대로 보낸다. 하나라도 실패하면 그것부터 다시 큐에 남긴다. */
+async function flushPendingChecks() {
+  if (!WORKER_URL) return;
+  const list = readPending();
+  if (!list.length) return;
+  const remaining = [];
+  for (const item of list) {
+    try {
+      await patchNotion(item.id, item.done);
+    } catch {
+      remaining.push(item);
+    }
+  }
+  writePending(remaining);
+}
+
+/** 할일/소설 항목의 완료 상태를 바꾼다. @returns 성공 여부 */
+async function setItemDone(item, done) {
+  item.done = done; // 화면에 이미 반영된 상태(낙관적)
+  if (!WORKER_URL) return true; // 워커가 없으면 이 기기에만 남는다
+  try {
+    await patchNotion(item.id, done);
+    return true;
+  } catch {
+    queuePending(item.id, done);
+    setStatus("노션에 바로 반영하지 못했습니다. 다음에 열 때 다시 시도합니다.");
+    return false;
+  }
 }
 
 // ---------------------------------------------------------------
@@ -287,7 +383,9 @@ function renderMain(now) {
   const app = document.getElementById("app");
   app.innerHTML = "";
   const d = state.todayData || {};
-  state.novelAssignments = resolveNovelAssignments(state.computed.blocks, d.novel_items || []);
+  // 완료한 소설 일정은 집필 블록 배정에서도 빠진다 — 다음 일정이 자동으로 당겨진다.
+  const activeNovels = (d.novel_items || []).filter((it) => !it.done);
+  state.novelAssignments = resolveNovelAssignments(state.computed.blocks, activeNovels);
 
   if (d.holiday_names && d.holiday_names.length) {
     const banner = el("div", { className: "banner banner--holiday" });
@@ -322,10 +420,12 @@ function renderMain(now) {
     app.appendChild(renderAgenda(now));
   }
 
-  if (d.todo_items && d.todo_items.length) {
-    app.appendChild(card(ICONS.check, "오늘의 할일", d.todo_items, "todo"));
+  // 노션에서 이미 완료 처리한 항목은 화면에서 뺀다.
+  const todos = (d.todo_items || []).filter((it) => !it.done);
+  if (todos.length) {
+    app.appendChild(card(ICONS.check, "오늘의 할일", todos, "todo"));
   }
-  app.appendChild(card(ICONS.book, "오늘의 소설 일정", d.novel_items || [], "novel"));
+  app.appendChild(card(ICONS.book, "오늘의 소설 일정", (d.novel_items || []).filter((it) => !it.done), "novel"));
 }
 
 function renderMorningBanner() {
@@ -603,6 +703,21 @@ function notionRow(item, sectionType) {
   else if (sectionType === "novel") cat = NOVEL_STAGE_CAT[tags[1]] || "other";
 
   const li = el("li", { className: "row", dataset: { cat } });
+
+  // 노션 페이지 id가 있는 항목만 체크할 수 있다(id 없이는 어느 페이지인지
+  // 특정할 수 없다 — today.json이 아직 갱신되지 않은 경우).
+  if (item.id) {
+    const box = el("input", { type: "checkbox", className: "row-check" });
+    box.addEventListener("change", async () => {
+      box.disabled = true;
+      li.classList.add("is-done");
+      await setItemDone(item, true);
+      // 사라지는 모습을 잠깐 보여준 뒤 다시 그린다.
+      setTimeout(() => renderMain(new Date()), 220);
+    });
+    li.appendChild(box);
+  }
+
   const timeText = (item.time || "").trim();
   li.appendChild(el("span", { className: "chip-time mono" + (timeText ? "" : " empty"), textContent: timeText || "--" }));
 
