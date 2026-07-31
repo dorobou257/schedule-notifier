@@ -81,7 +81,17 @@ function defaultStore() {
     blocks: BASE_BLOCKS.map((b) => ({ ...b })),
     presets: {},
     today: emptySleep(),
+    // 소설 일정 ↔ 집필 블록 배정. map[blockId] = 소설 항목 키(사용자가 직접 지정),
+    // excluded = 어디에도 배정하지 않기로 한 항목 키들. 둘 다 해당 없는 항목은
+    // 남은 집필 블록에 순서대로 자동 배정된다. 날짜가 바뀌면 통째로 비운다.
+    novelAssign: { date: null, map: {}, excluded: [] },
   };
+}
+
+/** 소설 항목의 안정적인 키. 노션 페이지 id가 있으면 그걸 쓰고, 아직
+ *  today.json이 갱신되지 않아 id가 없으면 내용으로 키를 만든다. */
+function novelKey(item) {
+  return item.id || `${(item.tags || []).join("/")}|${item.text || ""}`;
 }
 
 function migrate(parsed) {
@@ -92,6 +102,14 @@ function migrate(parsed) {
     blocks: Array.isArray(parsed.blocks) && parsed.blocks.length ? parsed.blocks : base.blocks,
     presets: parsed.presets && typeof parsed.presets === "object" ? parsed.presets : {},
     today: parsed.today && typeof parsed.today === "object" ? { ...emptySleep(), ...parsed.today } : base.today,
+    novelAssign:
+      parsed.novelAssign && typeof parsed.novelAssign.map === "object"
+        ? {
+            date: parsed.novelAssign.date || null,
+            map: parsed.novelAssign.map,
+            excluded: Array.isArray(parsed.novelAssign.excluded) ? parsed.novelAssign.excluded : [],
+          }
+        : base.novelAssign,
   };
 }
 
@@ -141,6 +159,11 @@ function rolloverIfStale(now) {
     store.today = emptySleep();
     saveStore(true);
     state.proposalDismissed = false;
+  }
+  // 소설 배정은 그날 하루짜리다 — 날짜가 바뀌면 비우고 다시 자동 배정한다.
+  if (store.novelAssign.date !== todayKey) {
+    store.novelAssign = { date: todayKey, map: {}, excluded: [] };
+    saveStore(true);
   }
 }
 
@@ -211,6 +234,7 @@ const state = {
   proposalDismissed: false,
   editorBlocks: null, // 편집 시트 열려있는 동안의 작업 사본
   nowCardEls: null,
+  novelAssignments: new Map(), // blockId → 소설 항목 (renderMain에서 매번 계산)
 };
 
 // ---------------------------------------------------------------
@@ -263,6 +287,7 @@ function renderMain(now) {
   const app = document.getElementById("app");
   app.innerHTML = "";
   const d = state.todayData || {};
+  state.novelAssignments = resolveNovelAssignments(state.computed.blocks, d.novel_items || []);
 
   if (d.holiday_names && d.holiday_names.length) {
     const banner = el("div", { className: "banner banner--holiday" });
@@ -366,6 +391,55 @@ function renderSpecialScheduleCard(items) {
   return section;
 }
 
+// ---------------------------------------------------------------
+// 소설 일정 ↔ 집필 블록 배정
+//
+// 노션에 "오늘 44화 초고" 같은 소설 일정이 있어도 하루 중 언제 쓸지는
+// 앱이 계산한 집필 블록에만 있었다. 둘을 이어붙여서 "2차 집필 = 44화 초고"로
+// 보이게 한다. 기본은 순서대로 자동 배정이고, 사용자가 지정하면 그게 이긴다.
+// ---------------------------------------------------------------
+
+/** 오늘 실제로 시간이 배정된 집필 블록들(시간순). */
+function writeBlocksOf(blocks) {
+  return blocks.filter((b) => b.category === "집필" && b.minutes > 0);
+}
+
+/** @returns {Map<string, object>} blockId → 소설 항목 */
+function resolveNovelAssignments(blocks, novelItems) {
+  const map = store.novelAssign.map || {};
+  const excluded = new Set(store.novelAssign.excluded || []);
+  const byKey = new Map(novelItems.map((it) => [novelKey(it), it]));
+  const result = new Map();
+  const used = new Set();
+  const writeBlocks = writeBlocksOf(blocks);
+
+  // 1) 사용자가 직접 지정한 것부터.
+  for (const b of writeBlocks) {
+    const key = map[b.id];
+    if (key && byKey.has(key)) {
+      result.set(b.id, byKey.get(key));
+      used.add(key);
+    }
+  }
+  // 2) 남은 항목을 아직 비어 있는 집필 블록에 순서대로 채운다.
+  //    "배정 해제"한 항목(excluded)은 자동 배정에서도 제외된다.
+  const rest = novelItems.filter((it) => !used.has(novelKey(it)) && !excluded.has(novelKey(it)));
+  let i = 0;
+  for (const b of writeBlocks) {
+    if (result.has(b.id)) continue;
+    if (i >= rest.length) break;
+    result.set(b.id, rest[i++]);
+  }
+  return result;
+}
+
+/** "[챌린지] 초고 · 44화" 형태의 한 줄 요약. */
+function novelLabel(item) {
+  const tags = (item.tags || []).filter(Boolean);
+  const head = tags.length ? `[${tags.join(" ")}] ` : "";
+  return head + (item.text || "");
+}
+
 function findCurrentIndex(blocks, nowMinutes) {
   return blocks.findIndex((b) => b.start < b.end && nowMinutes >= b.start && nowMinutes < b.end);
 }
@@ -394,6 +468,9 @@ function renderNowCard(now) {
   wrap.appendChild(el("div", { className: "now-card__label", textContent: "지금" }));
   const nameEl = el("div", { className: "now-card__name", textContent: b.name });
   wrap.appendChild(nameEl);
+
+  const novel = state.novelAssignments.get(b.id);
+  if (novel) wrap.appendChild(el("div", { className: "now-card__novel", textContent: novelLabel(novel) }));
 
   const meta = el("div", { className: "now-card__meta" });
   const timeEl = el("span", {
@@ -461,7 +538,11 @@ function renderAgenda(now) {
     else if (b.end <= nowMinutes) li.classList.add("is-past");
     if (reordering && fixed) li.classList.add("is-locked");
     li.appendChild(el("span", { className: "agenda__time mono", textContent: boundaryMinutesToHHMM(b.start, dayBoundaryHour) }));
-    li.appendChild(el("span", { className: "agenda__name", textContent: b.name }));
+    const body = el("div", { className: "agenda__body" });
+    body.appendChild(el("span", { className: "agenda__name", textContent: b.name }));
+    const novel = state.novelAssignments.get(b.id);
+    if (novel) body.appendChild(el("span", { className: "agenda__novel", textContent: novelLabel(novel) }));
+    li.appendChild(body);
     if (reordering && !fixed) li.appendChild(el("span", { className: "agenda__grip", innerHTML: ICONS.grip }));
     ul.appendChild(li);
   });
@@ -533,7 +614,76 @@ function notionRow(item, sectionType) {
   }
   body.appendChild(el("span", { className: "text", textContent: item.text || "" }));
   li.appendChild(body);
+
+  if (sectionType === "novel") {
+    // 이 소설 일정이 어느 집필 블록에 배정됐는지 보여주고, 눌러서 바꾼다.
+    const key = novelKey(item);
+    let assignedTo = null;
+    for (const [blockId, it] of state.novelAssignments) {
+      if (novelKey(it) === key) {
+        assignedTo = state.computed.blocks.find((b) => b.id === blockId);
+        break;
+      }
+    }
+    const btn = el("button", {
+      className: "row-assign" + (assignedTo ? " is-on" : ""),
+      textContent: assignedTo ? assignedTo.name : "배정",
+    });
+    btn.addEventListener("click", () => openNovelAssignSheet(item));
+    li.appendChild(btn);
+  }
   return li;
+}
+
+/** 소설 항목 하나를 어느 집필 블록에 붙일지 고르는 시트. */
+function openNovelAssignSheet(item) {
+  const key = novelKey(item);
+  const blocks = writeBlocksOf(state.computed.blocks);
+  const dayBoundaryHour = store.settings.dayBoundaryHour;
+
+  const list = el("ul", { className: "rows" });
+  const pick = (blockId) => {
+    const map = { ...store.novelAssign.map };
+    // 한 항목이 두 블록에 동시에 붙어 있을 수는 없다.
+    for (const [bid, k] of Object.entries(map)) if (k === key) delete map[bid];
+    // 배정을 지정하면 제외 목록에서 빼고, 해제하면 넣는다 — 넣어두지 않으면
+    // 자리를 비우자마자 자동 배정이 같은 항목을 도로 채워버린다.
+    const excluded = (store.novelAssign.excluded || []).filter((k) => k !== key);
+    if (blockId) map[blockId] = key;
+    else excluded.push(key);
+    store.novelAssign = { date: store.novelAssign.date, map, excluded };
+    saveStore(true);
+    closeSheet();
+    renderShell();
+  };
+
+  blocks.forEach((b) => {
+    const row = el("li", { className: "row row--pick" });
+    row.appendChild(
+      el("span", {
+        className: "chip-time mono",
+        textContent: boundaryMinutesToHHMM(b.start, dayBoundaryHour),
+      })
+    );
+    const rb = el("div", { className: "row-body" });
+    rb.appendChild(el("span", { className: "text", textContent: b.name }));
+    const current = state.novelAssignments.get(b.id);
+    if (current) rb.appendChild(el("span", { className: "row-sub", textContent: "현재: " + novelLabel(current) }));
+    row.appendChild(rb);
+    row.addEventListener("click", () => pick(b.id));
+    list.appendChild(row);
+  });
+
+  if (!blocks.length) {
+    list.appendChild(el("li", { className: "empty", textContent: "오늘은 집필 블록이 없습니다." }));
+  }
+
+  const clearBtn = el("button", { className: "btn btn--ghost", textContent: "배정 해제" });
+  clearBtn.addEventListener("click", () => pick(null));
+  const cancelBtn = el("button", { className: "btn btn--ghost", textContent: "닫기" });
+  cancelBtn.addEventListener("click", closeSheet);
+
+  openSheet("집필 블록에 배정", novelLabel(item), [list], [clearBtn, cancelBtn]);
 }
 
 // ---------------------------------------------------------------

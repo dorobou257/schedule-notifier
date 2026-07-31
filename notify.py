@@ -104,17 +104,20 @@ def build_today_data(date_str: str, weekday: int, schedule_pages: list, novel_pa
 
     # 종류="일정"으로 노션에 직접 등록된 항목이 있으면 그날은 앱의 자동 루틴
     # 대신 이 목록을 그대로 보여준다(비어 있으면 프론트가 routine.js로 계산).
+    # 각 항목에 노션 페이지 id를 함께 넘긴다 — 앱이 "이 소설 일정은 2차 집필에
+    # 배정" 같은 상태를 항목별로 기억하려면 안정적인 키가 필요하다.
     special_items = [
-        {"time": get_time(p), "text": get_title(p)} for p in special_pages
+        {"id": p["id"], "time": get_time(p), "text": get_title(p)} for p in special_pages
     ]
 
     todo_items = [
-        {"time": get_time(p), "tags": [get_select(p, "종류")], "text": get_title(p)}
+        {"id": p["id"], "time": get_time(p), "tags": [get_select(p, "종류")], "text": get_title(p)}
         for p in todo_pages
     ]
 
     novel_items = [
         {
+            "id": p["id"],
             "time": get_time(p),
             "tags": [get_select(p, "작품"), get_select(p, "유형")],
             "text": get_title(p),

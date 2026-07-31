@@ -108,6 +108,8 @@ main{ padding:2px 16px 8px; display:flex; flex-direction:column; gap:14px; }
 }
 .now-card__label{ font-size:12px; font-weight:800; letter-spacing:.1em; text-transform:uppercase; color:var(--pine); }
 .now-card__name{ margin:6px 0 14px; font-size:26px; font-weight:800; line-height:1.25; word-break:keep-all; }
+/* 지금이 집필 블록이면 어떤 소설 일정인지 바로 아래 붙인다. */
+.now-card__novel{ margin:-8px 0 14px; font-size:14px; font-weight:700; color:var(--pine-ink); word-break:keep-all; }
 .now-card__meta{ display:flex; align-items:baseline; justify-content:space-between; gap:10px; margin-bottom:8px; }
 .now-card__time{ font-size:13px; font-weight:600; color:var(--muted); }
 .now-card__remain{ font-size:13px; font-weight:700; color:var(--pine-ink); }
@@ -162,6 +164,10 @@ li.agenda__row.dragging{
   will-change:transform;
   transition:box-shadow 150ms ease, background 150ms ease;
 }
+.agenda__body{ display:flex; flex-direction:column; gap:2px; min-width:0; flex:1; }
+/* 이 집필 블록에 배정된 소설 일정 — 블록 이름 아래 한 줄로 붙는다. */
+.agenda__novel{ font-size:12px; color:var(--muted); word-break:keep-all; }
+li.agenda__row.is-current .agenda__novel{ font-weight:400; }
 .agenda__grip{ margin-left:auto; flex:none; color:var(--faint); display:flex; align-items:center; }
 .agenda__hint{ margin:8px 12px 4px; font-size:12px; color:var(--faint); line-height:1.5; }
 @media (prefers-reduced-motion: reduce){
@@ -200,6 +206,19 @@ li.row[data-cat="other"]{ border-left-color:var(--cat-other); }
 .row-body .tags{ display:flex; gap:6px; flex-wrap:wrap; }
 .tag{ font-size:11px; font-weight:700; color:var(--muted); background:var(--surface-2); border-radius:6px; padding:2px 6px; }
 .row-body .text{ font-size:15px; line-height:1.42; word-break:keep-all; }
+.row-sub{ font-size:12px; color:var(--faint); }
+
+/* 소설 일정 행의 "어느 집필 블록에 배정됐는지" 버튼 */
+button.row-assign{
+  flex:none; margin-left:auto; align-self:center; padding:5px 10px; border-radius:99px;
+  border:1px solid var(--rule); background:none; color:var(--faint);
+  font-size:11.5px; font-weight:700; cursor:pointer; white-space:nowrap;
+}
+button.row-assign.is-on{ background:var(--pine-soft); color:var(--pine-ink); border-color:transparent; }
+button.row-assign:active{ transform:scale(0.95); }
+/* 배정 시트에서 고르는 행 */
+li.row--pick{ cursor:pointer; }
+li.row--pick:active{ background:var(--surface-2); }
 
 p.empty{ margin:0; padding:10px 14px 14px; color:var(--faint); font-size:14px; }
 #status{ text-align:center; color:var(--faint); font-size:12px; padding:10px 0 0; }
