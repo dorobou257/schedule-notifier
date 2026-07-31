@@ -3,4 +3,4 @@
 // 비워두면 앱은 today.json만 읽는다 — 노션 데이터는 하루 한 번 갱신되고,
 // 할일 체크는 이 기기에만 남는다. 주소를 채우면 열 때마다 노션의 현재
 // 상태를 바로 읽고, 체크한 것도 노션에 그대로 반영된다.
-export const WORKER_URL = "";
+export const WORKER_URL = "https://schedule-notion.dorobou257.workers.dev";

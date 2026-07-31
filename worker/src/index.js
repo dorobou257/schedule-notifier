@@ -74,7 +74,10 @@ async function queryDatabase(env, databaseId, dateStr) {
       headers: notionHeaders(env),
       body: JSON.stringify(body),
     });
-    if (!res.ok) throw new Error(`노션 조회 실패(${res.status}): ${await res.text()}`);
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      throw new Error(`노션 조회 실패(${res.status}) db=${databaseId} date=${dateStr}: ${detail || "(본문 없음)"}`);
+    }
     const data = await res.json();
     results.push(...(data.results || []));
     cursor = data.has_more ? data.next_cursor : null;
@@ -187,6 +190,23 @@ export default {
 
     if (request.method === "OPTIONS") {
       return new Response(null, { status: 204, headers: corsHeaders(env) });
+    }
+    // 설정이 제대로 들어갔는지만 확인하는 용도. 토큰은 "그럴듯한 모양인지"만
+    // 알려주고 값은 한 글자도 내보내지 않는다 — 공개 엔드포인트이기 때문이다.
+    // (붙여넣기가 실패해 Ctrl+V 제어문자가 그대로 저장된 적이 있어서 남겨둠)
+    if (request.method === "GET" && url.pathname === "/diag") {
+      const t = env.NOTION_TOKEN || "";
+      return json(
+        {
+          hasToken: !!t,
+          tokenLength: t.length,
+          tokenLooksValid: /^(secret_|ntn_)[A-Za-z0-9]+$/.test(t),
+          scheduleDb: env.SCHEDULE_DB_ID || null,
+          novelDb: env.NOVEL_DB_ID || null,
+          today: todayKST(),
+        },
+        env
+      );
     }
     try {
       if (request.method === "GET" && url.pathname === "/today") return await handleToday(request, env);
