@@ -1,38 +1,48 @@
 {
-  "date": "2026-08-02",
-  "weekday": "일요일",
+  "date": "2026-08-03",
+  "weekday": "월요일",
   "holiday_names": [],
   "special_items": [],
   "todo_items": [],
   "novel_items": [
     {
-      "id": "3a925ba2-c8ef-80ac-a5c1-da23ea0e701a",
+      "id": "3ae25ba2-c8ef-8026-a129-d8ce42cf22a1",
       "time": "",
       "tags": [
         "시한부 북부대공의 호위기사가 되었다",
-        "트리트먼트"
+        "초고"
       ],
-      "text": "EP 4",
+      "text": "16화",
       "done": false
     },
     {
-      "id": "37e25ba2-c8ef-80b4-8b21-fbd4ca66abaf",
+      "id": "37e25ba2-c8ef-80b7-88ed-c47e91c84de7",
       "time": "",
       "tags": [
         "챌린지",
         "초고"
       ],
-      "text": "46화",
+      "text": "47화",
       "done": false
     },
     {
-      "id": "37e25ba2-c8ef-804d-bf14-f2ebc6b37f35",
+      "id": "37e25ba2-c8ef-80d9-b7db-d7cf72769c5a",
+      "time": "",
+      "tags": [
+        "챌린지",
+        "초고"
+      ],
+      "text": "48화",
+      "done": false
+    },
+    {
+      "id": "37e25ba2-c8ef-808b-ae54-df76b23aefef",
       "time": "",
       "tags": [
         "챌린지",
         "연재"
       ],
-      "text": "46화",
+      "text": "47화",
       "done": false
     }
   ],
