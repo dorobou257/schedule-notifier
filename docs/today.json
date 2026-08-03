@@ -1,6 +1,6 @@
 {
-  "date": "2026-08-03",
-  "weekday": "월요일",
+  "date": "2026-08-04",
+  "weekday": "화요일",
   "holiday_names": [],
   "special_items": [],
   "todo_items": [],
@@ -16,16 +16,6 @@
       "done": false
     },
     {
-      "id": "37e25ba2-c8ef-80b7-88ed-c47e91c84de7",
-      "time": "",
-      "tags": [
-        "챌린지",
-        "초고"
-      ],
-      "text": "47화",
-      "done": false
-    },
-    {
       "id": "37e25ba2-c8ef-80d9-b7db-d7cf72769c5a",
       "time": "",
       "tags": [
@@ -36,13 +26,13 @@
       "done": false
     },
     {
-      "id": "37e25ba2-c8ef-808b-ae54-df76b23aefef",
+      "id": "37e25ba2-c8ef-801d-8525-e76cb02b294b",
       "time": "",
       "tags": [
         "챌린지",
         "연재"
       ],
-      "text": "47화",
+      "text": "48화",
       "done": false
     }
   ],
