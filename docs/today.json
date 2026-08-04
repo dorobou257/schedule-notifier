@@ -1,38 +1,57 @@
 {
-  "date": "2026-08-04",
-  "weekday": "화요일",
+  "date": "2026-08-05",
+  "weekday": "수요일",
   "holiday_names": [],
   "special_items": [],
-  "todo_items": [],
-  "novel_items": [
+  "todo_items": [
     {
-      "id": "3ae25ba2-c8ef-8026-a129-d8ce42cf22a1",
-      "time": "",
+      "id": "3b225ba2-c8ef-8070-bb48-ec94effd3e8b",
+      "time": "12:30",
       "tags": [
-        "시한부 북부대공의 호위기사가 되었다",
-        "초고"
+        "할일"
       ],
-      "text": "16화",
+      "text": "웹소설 트래커",
       "done": false
     },
     {
-      "id": "37e25ba2-c8ef-80d9-b7db-d7cf72769c5a",
+      "id": "3ae25ba2-c8ef-8056-ad83-dd7cc677de51",
+      "time": "10:00",
+      "tags": [
+        "할일"
+      ],
+      "text": "정전",
+      "done": false
+    }
+  ],
+  "novel_items": [
+    {
+      "id": "3a925ba2-c8ef-80ac-a5c1-da23ea0e701a",
+      "time": "",
+      "tags": [
+        "시한부 북부대공의 호위기사가 되었다",
+        "트리트먼트"
+      ],
+      "text": "EP 4",
+      "done": false
+    },
+    {
+      "id": "37e25ba2-c8ef-8060-ad15-d0a334a19cdb",
       "time": "",
       "tags": [
         "챌린지",
         "초고"
       ],
-      "text": "48화",
+      "text": "49화",
       "done": false
     },
     {
-      "id": "37e25ba2-c8ef-801d-8525-e76cb02b294b",
+      "id": "37e25ba2-c8ef-80ed-bd7f-df740b4e3b8a",
       "time": "",
       "tags": [
         "챌린지",
         "연재"
       ],
-      "text": "48화",
+      "text": "49화",
       "done": false
     }
   ],
