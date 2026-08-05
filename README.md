@@ -19,6 +19,7 @@
 - `tools/make_icons.py` : `docs/icon.svg`와 같은 도형으로 앱 아이콘(PNG)을 생성하는 로컬 전용 스크립트. 결과물만 커밋하며 CI에서는 실행하지 않는다(Pillow 필요). 도안을 고칠 땐 `icon.svg`와 이 스크립트의 `BARS`를 함께 고친다.
 - `tests/` : `npm test`(= `node --test tests/*.test.mjs`)로 한 번에 돌린다. 루틴 계산과 워커 로직 모두 검증하며 토큰 없이 실행된다.
 - `.github/workflows/daily-notify.yml` : 매일 아침 8시에 외부 크론이 깨우는 워크플로우 (today.json 갱신 + 알림 발송 + Pages 배포)
+- `.github/workflows/deploy-pages.yml` : `docs/`가 바뀐 푸시마다 Pages만 다시 배포하는 워크플로우. Pages가 브랜치가 아니라 워크플로우 아티팩트로 서비스되기 때문에, 이게 없으면 화면을 고쳐 푸시해도 다음 날 아침 `daily-notify`가 돌 때까지 반영되지 않는다.
 - `.github/workflows/yearly-holidays.yml` : 매년 1월 초 실행 스케줄러
 
 ## 준비 단계
