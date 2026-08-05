@@ -1,4 +1,4 @@
-const SHELL_CACHE = "schedule-shell-v5";
+const SHELL_CACHE = "schedule-shell-v6";
 const SHELL_FILES = [
   "./",
   "./index.html",
@@ -7,9 +7,11 @@ const SHELL_FILES = [
   "./app.js",
   "./config.js",
   "./manifest.json",
+  "./icon.svg",
   "./icon-192.png",
   "./icon-512.png",
   "./icon-512-maskable.png",
+  "./apple-touch-icon.png",
 ];
 
 self.addEventListener("install", (event) => {

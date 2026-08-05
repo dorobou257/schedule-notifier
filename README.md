@@ -13,10 +13,10 @@
   - `routine.js` : 취침 시각으로부터 하루 일과를 계산하는 순수 로직(부작용 없음, `tests/routine.test.mjs`로 검증)
   - `app.js` : 노션 데이터 로딩, 취침 기록·조정 제안·루틴 편집기·소설 배정·설정 등 화면과 상태를 담당
   - `config.js` : 노션 중계 워커 주소(`WORKER_URL`). 비우면 `today.json`만 읽는 예전 방식으로 동작한다.
-  - `manifest.json`, `service-worker.js`, `icon-*.png` : 홈 화면 설치 + 오프라인 캐싱을 위한 PWA 필수 파일
+  - `manifest.json`, `service-worker.js`, `icon.svg`, `icon-*.png`, `apple-touch-icon.png` : 홈 화면 설치 + 오프라인 캐싱을 위한 PWA 필수 파일. `icon.svg`가 아이콘 도안의 원본이고 PNG들은 `tools/make_icons.py`가 같은 좌표로 그려낸 결과물이다.
   - `today.json` : `notify.py`가 매일 아침 자동으로 덮어쓰는 데이터(공휴일/특별 일정/할일/소설 + 오늘 알림 발송 여부). 워커가 죽었거나 오프라인일 때의 폴백이기도 하다.
 - `worker/` : 노션 중계 Cloudflare Worker. 앱은 정적 사이트라 노션을 직접 못 부르므로(토큰을 클라이언트에 둘 수 없고 CORS도 막힌다) 이 워커만 토큰을 안다. 배포 방법은 `worker/README.md`.
-- `tools/make_icons.py` : 앱 아이콘(PNG)을 생성하는 로컬 전용 스크립트. 결과물만 커밋하며 CI에서는 실행하지 않는다.
+- `tools/make_icons.py` : `docs/icon.svg`와 같은 도형으로 앱 아이콘(PNG)을 생성하는 로컬 전용 스크립트. 결과물만 커밋하며 CI에서는 실행하지 않는다(Pillow 필요). 도안을 고칠 땐 `icon.svg`와 이 스크립트의 `BARS`를 함께 고친다.
 - `tests/` : `npm test`(= `node --test tests/*.test.mjs`)로 한 번에 돌린다. 루틴 계산과 워커 로직 모두 검증하며 토큰 없이 실행된다.
 - `.github/workflows/daily-notify.yml` : 매일 아침 8시에 외부 크론이 깨우는 워크플로우 (today.json 갱신 + 알림 발송 + Pages 배포)
 - `.github/workflows/yearly-holidays.yml` : 매년 1월 초 실행 스케줄러

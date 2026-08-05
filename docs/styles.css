@@ -2,23 +2,28 @@
    일정 알리미 — 디자인 시스템
    원칙: 뉴트럴이 화면을 지배하고 색은 최소한만 쓴다. 카테고리 구분은
    칩/태그 배경색이 아니라 각 행의 왼쪽 4px 색 바 하나로만 표현한다.
+
+   바탕·글자·선은 웹소설 트래커(#FAF9F7)와 같은 따뜻한 종이색이고, 액센트도
+   트래커와 같은 인디고다 — 두 앱을 오갈 때 색이 튀지 않는 게 우선이라 일부러
+   같은 색을 쓴다. 예전 솔잎색은 따뜻한 종이색 위의 차가운 초록이라 겉돌았다.
    ============================================================ */
 
 :root{
-  --bg:#F4F5EF;
+  --bg:#FAF7F2;
   --surface:#FFFFFF;
-  --surface-2:#ECEDE3;
-  --ink:#1C2420;
-  --muted:#5B655F;
-  --faint:#8C948E;
-  --rule:#DEDFD2;
-  --pine:#2E6C5A;
-  --pine-ink:#1F4E41;
-  --pine-soft:rgba(46,108,90,.10);
+  --surface-2:#F1ECE3;
+  --ink:#1F1B16;      /* 따뜻한 잉크 — 트래커의 #1C1B1A 와 같은 무게 */
+  --muted:#6A6055;    /* 흰 카드 위에서 4.5:1 을 넘겨야 한다 */
+  --faint:#918776;    /* 힌트·부가 정보 — 여기까지가 읽을 수 있는 한계선 */
+  --rule:#E7E0D4;
+  --accent:#4F46E5;      /* 트래커와 같은 인디고 */
+  --accent-ink:#4038C4;  /* 강조 텍스트 — 흰 카드 위에서 8:1 */
+  --accent-soft:rgba(79,70,229,.10);
+  --on-accent:#FFFFFF;   /* 액센트로 채운 면 위의 글자 */
   --red:#B23A2E;
   --red-soft:rgba(178,58,46,.09);
-  --shadow:0 1px 2px rgba(28,36,32,.04), 0 6px 20px rgba(28,36,32,.06);
-  --overlay:rgba(20,24,20,.4);
+  --shadow:0 1px 2px rgba(38,33,24,.04), 0 6px 20px rgba(38,33,24,.06);
+  --overlay:rgba(24,21,16,.4);
   color-scheme: light;
 
   /* 카테고리 5색. 배경 채움엔 쓰지 않고 왼쪽 색 바·작은 텍스트에만 쓴다. */
@@ -30,9 +35,14 @@
 }
 @media (prefers-color-scheme: dark){
   :root{
-    --bg:#141815; --surface:#1B211C; --surface-2:#232B24;
-    --ink:#E7ECE7; --muted:#9BA79F; --faint:#6C766F; --rule:#28312A;
-    --pine:#5CB89B; --pine-ink:#8CD9C0; --pine-soft:rgba(92,184,155,.14);
+    /* 다크도 트래커(#171614)와 같은 따뜻한 어둠. 기본값은 아니고 기기 설정을
+       따를 뿐이다. */
+    --bg:#17130F; --surface:#201B15; --surface-2:#2A241C;
+    --ink:#F0EADF; --muted:#A79C8B; --faint:#7C7160; --rule:#302A21;
+    /* 다크의 인디고도 트래커와 같은 값. 밝아진 액센트 위에는 흰 글자를 얹으면
+       대비가 모자라므로 바탕색을 얹는다. */
+    --accent:#8B85F0; --accent-ink:#ADA8F7; --accent-soft:rgba(139,133,240,.14);
+    --on-accent:#17130F;
     --red:#E1786C; --red-soft:rgba(225,120,108,.13);
     --shadow:0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.35);
     --overlay:rgba(0,0,0,.55);
@@ -60,6 +70,9 @@ body{
   padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
 }
 button, input, select{ font:inherit; color:inherit; }
+/* 체크박스·스위치는 브라우저 기본 파랑 대신 앱 액센트로. 개별 규칙에서 지정한
+   곳도 있지만, 설정 시트처럼 빠뜨린 곳이 생기면 그 자리만 색이 튄다. */
+input[type="checkbox"], input[type="radio"]{ accent-color:var(--accent); }
 .mono{ font-family:"D2Coding","SF Mono","Consolas","Menlo",monospace; font-variant-numeric:tabular-nums; }
 
 .wrap{ max-width:520px; margin:0 auto; padding:0 0 96px; } /* 하단 취침 바 공간 확보 */
@@ -70,7 +83,7 @@ header{
   display:flex; align-items:flex-start; justify-content:space-between; gap:12px;
 }
 header .titles{ display:flex; flex-direction:column; gap:3px; }
-header .eyebrow{ font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:var(--pine); font-weight:800; }
+header .eyebrow{ font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:var(--accent); font-weight:800; }
 header h1{ margin:0; font-size:25px; font-weight:800; letter-spacing:-.01em; text-wrap:balance; }
 header .weekday{ font-size:13.5px; color:var(--muted); font-weight:600; }
 header .actions{ flex:none; display:flex; gap:8px; }
@@ -81,7 +94,7 @@ header .actions{ flex:none; display:flex; gap:8px; }
   display:flex; align-items:center; justify-content:center;
   box-shadow:var(--shadow); transition:transform .5s ease, color .2s ease;
 }
-.icon-btn:active{ color:var(--pine); }
+.icon-btn:active{ color:var(--accent); }
 .icon-btn.spin svg{ animation:spin .6s linear; }
 @keyframes spin{ to{ transform:rotate(360deg); } }
 @media (prefers-reduced-motion: reduce){ .icon-btn.spin svg{ animation:none; } }
@@ -97,24 +110,24 @@ main{ padding:2px 16px 8px; display:flex; flex-direction:column; gap:14px; }
 .banner .spacer{ flex:1; }
 .banner-link{ background:none; border:none; padding:0; font:inherit; font-weight:800; text-decoration:underline; cursor:pointer; }
 .banner--holiday{ background:var(--red-soft); color:var(--red); border:1px solid var(--red); }
-.banner--adjust{ background:var(--pine-soft); color:var(--pine-ink); border:1px solid var(--pine); }
+.banner--adjust{ background:var(--accent-soft); color:var(--accent-ink); border:1px solid var(--accent); }
 .banner--wake{ background:var(--surface); color:var(--ink); border:1px solid var(--rule); box-shadow:var(--shadow); }
-.banner--wake .banner-link{ color:var(--pine-ink); }
+.banner--wake .banner-link{ color:var(--accent-ink); }
 
 /* ---------- 상황판(지금 카드) ---------- */
 .now-card{
   background:var(--surface); border:1px solid var(--rule); border-radius:18px;
   padding:20px; box-shadow:var(--shadow);
 }
-.now-card__label{ font-size:12px; font-weight:800; letter-spacing:.1em; text-transform:uppercase; color:var(--pine); }
+.now-card__label{ font-size:12px; font-weight:800; letter-spacing:.1em; text-transform:uppercase; color:var(--accent); }
 .now-card__name{ margin:6px 0 14px; font-size:26px; font-weight:800; line-height:1.25; word-break:keep-all; }
 /* 지금이 집필 블록이면 어떤 소설 일정인지 바로 아래 붙인다. */
-.now-card__novel{ margin:-8px 0 14px; font-size:14px; font-weight:700; color:var(--pine-ink); word-break:keep-all; }
+.now-card__novel{ margin:-8px 0 14px; font-size:14px; font-weight:700; color:var(--accent-ink); word-break:keep-all; }
 .now-card__meta{ display:flex; align-items:baseline; justify-content:space-between; gap:10px; margin-bottom:8px; }
 .now-card__time{ font-size:13px; font-weight:600; color:var(--muted); }
-.now-card__remain{ font-size:13px; font-weight:700; color:var(--pine-ink); }
+.now-card__remain{ font-size:13px; font-weight:700; color:var(--accent-ink); }
 .now-card__bar{ height:6px; border-radius:99px; background:var(--surface-2); overflow:hidden; }
-.now-card__bar-fill{ height:100%; background:var(--pine); border-radius:99px; transition:width .3s ease; }
+.now-card__bar-fill{ height:100%; background:var(--accent); border-radius:99px; transition:width .3s ease; }
 .now-card--empty{ color:var(--muted); font-size:14.5px; }
 
 /* ---------- 다음 일정 목록 ---------- */
@@ -175,7 +188,7 @@ li.agenda__row.is-current .agenda__novel{ font-weight:400; }
 .agenda__grip{ margin-left:auto; flex:none; color:var(--faint); display:flex; align-items:center; }
 .agenda__hint{ margin:8px 12px 4px; font-size:12px; color:var(--faint); line-height:1.5; }
 /* 오늘만 성격을 바꾼 블록 표시 */
-.agenda__swap{ font-size:11.5px; font-weight:700; color:var(--pine-ink); }
+.agenda__swap{ font-size:11.5px; font-weight:700; color:var(--accent-ink); }
 li.agenda__row.is-swapped{ background:var(--surface-2); }
 /* 특별 일정이 있는 날 루틴을 꺼내보는 버튼 */
 button.routine-toggle{
@@ -201,7 +214,7 @@ section.card:nth-of-type(2){ animation-delay:.08s; }
 @media (prefers-reduced-motion: reduce){ section.card{ opacity:1; transform:none; animation:none; } }
 
 .card-head{ display:flex; align-items:center; gap:8px; padding:12px 14px 8px; }
-.card-head .icon{ flex:none; width:26px; height:26px; border-radius:8px; background:var(--pine-soft); color:var(--pine-ink); display:flex; align-items:center; justify-content:center; }
+.card-head .icon{ flex:none; width:26px; height:26px; border-radius:8px; background:var(--accent-soft); color:var(--accent-ink); display:flex; align-items:center; justify-content:center; }
 .card-head h2{ margin:0; font-size:13.5px; font-weight:800; color:var(--ink); }
 .card-head .count{ margin-left:auto; font-size:12px; color:var(--faint); }
 
@@ -225,7 +238,7 @@ li.row[data-cat="other"]{ border-left-color:var(--cat-other); }
 
 /* 체크하면 노션에도 완료로 반영된다(워커가 설정된 경우) */
 input.row-check{
-  flex:none; width:19px; height:19px; margin:2px 0 0; accent-color:var(--pine); cursor:pointer;
+  flex:none; width:19px; height:19px; margin:2px 0 0; accent-color:var(--accent); cursor:pointer;
 }
 /* 체크한 항목은 목록에 남되 끝난 티가 나게 — 다시 눌러 되돌릴 수 있다. */
 li.row.is-checked{ opacity:.5; transition:opacity 200ms ease; }
@@ -238,7 +251,7 @@ button.row-assign{
   border:1px solid var(--rule); background:none; color:var(--faint);
   font-size:11.5px; font-weight:700; cursor:pointer; white-space:nowrap;
 }
-button.row-assign.is-on{ background:var(--pine-soft); color:var(--pine-ink); border-color:transparent; }
+button.row-assign.is-on{ background:var(--accent-soft); color:var(--accent-ink); border-color:transparent; }
 button.row-assign:active{ transform:scale(0.95); }
 /* 배정 시트에서 고르는 행 */
 li.row--pick{ cursor:pointer; }
@@ -258,14 +271,14 @@ li.row.is-past .text{ text-decoration:line-through; }
 .sleep-bar__inner{ max-width:520px; margin:0 auto; }
 button.sleep-btn{
   width:100%; padding:15px; border:none; border-radius:14px; cursor:pointer;
-  background:var(--pine); color:#fff; font-size:15.5px; font-weight:800;
+  background:var(--accent); color:var(--on-accent); font-size:15.5px; font-weight:800;
   box-shadow:0 4px 16px rgba(46,108,90,.28);
 }
-button.sleep-btn.is-active{ background:var(--pine-ink); }
+button.sleep-btn.is-active{ background:var(--accent-ink); }
 
 /* ---------- 버튼 공통 ---------- */
 .btn{ padding:11px 18px; border-radius:12px; font-size:14.5px; font-weight:700; cursor:pointer; border:1px solid transparent; }
-.btn--primary{ background:var(--pine); color:#fff; }
+.btn--primary{ background:var(--accent); color:var(--on-accent); }
 .btn--ghost{ background:transparent; border-color:var(--rule); color:var(--ink); }
 .btn--danger{ background:transparent; border-color:var(--red); color:var(--red); }
 .btn--block{ width:100%; }
@@ -297,9 +310,9 @@ button.sleep-btn.is-active{ background:var(--pine-ink); }
 /* ---------- 제안 시트: 항목별 토글 ---------- */
 .proposal-row{ display:flex; align-items:center; gap:12px; padding:11px 4px; border-bottom:1px solid var(--rule); }
 .proposal-row:last-of-type{ border-bottom:none; }
-.proposal-row input[type="checkbox"]{ width:19px; height:19px; accent-color:var(--pine); flex:none; }
+.proposal-row input[type="checkbox"]{ width:19px; height:19px; accent-color:var(--accent); flex:none; }
 .proposal-row__label{ flex:1; font-size:14.5px; }
-.proposal-row__delta{ font-size:13px; font-weight:700; color:var(--pine-ink); }
+.proposal-row__delta{ font-size:13px; font-weight:700; color:var(--accent-ink); }
 .proposal-summary{ margin-top:14px; padding:12px 14px; background:var(--surface-2); border-radius:12px; font-size:13.5px; color:var(--muted); display:flex; flex-direction:column; gap:4px; }
 .proposal-summary strong{ color:var(--ink); }
 
@@ -309,7 +322,7 @@ button.sleep-btn.is-active{ background:var(--pine-ink); }
   padding:10px 14px; border-radius:12px; font-size:13px; font-weight:700;
   background:var(--surface-2); color:var(--muted); margin-bottom:12px;
 }
-.validation-bar.is-ok{ color:var(--pine-ink); }
+.validation-bar.is-ok{ color:var(--accent-ink); }
 .validation-bar.is-error{ color:var(--red); }
 
 ul.block-list{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:8px; }
@@ -356,7 +369,7 @@ li.block-item.dragging{
   width:32px; height:32px; border-radius:50%; border:1px solid var(--rule); background:var(--surface);
   color:var(--muted); font-size:12.5px; font-weight:700; cursor:pointer;
 }
-.day-toggle.is-on{ background:var(--pine); border-color:var(--pine); color:#fff; }
+.day-toggle.is-on{ background:var(--accent); border-color:var(--accent); color:var(--on-accent); }
 
 /* ---------- 설정 ---------- */
 .priority-list{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:6px; }
@@ -369,4 +382,4 @@ li.block-item.dragging{
 .settings-group h3{ margin:0 0 4px; font-size:12.5px; font-weight:800; color:var(--faint); text-transform:uppercase; letter-spacing:.06em; }
 .preset-list{ display:flex; flex-wrap:wrap; gap:8px; }
 .preset-chip{ padding:8px 14px; border-radius:99px; border:1px solid var(--rule); background:var(--surface); font-size:13px; font-weight:700; cursor:pointer; }
-.preset-chip.is-active{ background:var(--pine-soft); border-color:var(--pine); color:var(--pine-ink); }
+.preset-chip.is-active{ background:var(--accent-soft); border-color:var(--accent); color:var(--accent-ink); }
