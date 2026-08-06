@@ -60,6 +60,7 @@ test("migrate: dayTweaks.categories가 없으면 통째로 기본값", () => {
     categories: {},
     showRoutine: false,
     unpinned: [],
+    skippedLectures: [],
   });
 });
 
@@ -127,7 +128,7 @@ test("롤오버: 하루가 바뀌면 오늘만 적용되던 손질과 소설 배
 
   // 다음날이 되면 원래 루틴으로 돌아간다.
   rolloverIfStale(at(2026, 8, 7, 9, 0));
-  assert.deepEqual(store.dayTweaks, { date: "2026-08-07", categories: {}, showRoutine: false, unpinned: [] });
+  assert.deepEqual(store.dayTweaks, { date: "2026-08-07", categories: {}, showRoutine: false, unpinned: [], skippedLectures: [] });
   assert.deepEqual(store.novelAssign, { date: "2026-08-07", map: {}, excluded: [] });
 });
 
@@ -140,7 +141,7 @@ test("롤오버: 며칠을 건너뛰고 열어도 한 번에 정리된다", () =
   // 일주일 뒤에 앱을 연다(여행 다녀온 뒤 같은 상황).
   assert.equal(rolloverIfStale(at(2026, 8, 9, 10, 0)), true);
   assert.deepEqual(store.today, emptySleep());
-  assert.deepEqual(store.dayTweaks, { date: "2026-08-09", categories: {}, showRoutine: false, unpinned: [] });
+  assert.deepEqual(store.dayTweaks, { date: "2026-08-09", categories: {}, showRoutine: false, unpinned: [], skippedLectures: [] });
 });
 
 test("롤오버: 취침 기록이 없으면 아무것도 비웠다고 하지 않는다", () => {

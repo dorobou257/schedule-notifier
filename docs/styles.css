@@ -32,6 +32,7 @@
   --cat-exercise:#4F6B27; /* 운동 */
   --cat-rest:#8A5A2E;     /* 식사·휴식·여유 */
   --cat-other:#5B655F;    /* 기상/취침 등 기타 — muted와 동일 */
+  --cat-lecture:#8A3B52;  /* 강의 */
 }
 @media (prefers-color-scheme: dark){
   :root{
@@ -53,6 +54,7 @@
     --cat-exercise:#C8DE9E;
     --cat-rest:#E8C79A;
     --cat-other:#9BA79F;
+    --cat-lecture:#EDA9BC;
   }
 }
 
@@ -149,6 +151,7 @@ li.agenda__row[data-cat="work"]{ border-left-color:var(--cat-work); }
 li.agenda__row[data-cat="exercise"]{ border-left-color:var(--cat-exercise); }
 li.agenda__row[data-cat="rest"]{ border-left-color:var(--cat-rest); }
 li.agenda__row[data-cat="other"]{ border-left-color:var(--cat-other); }
+li.agenda__row[data-cat="lecture"]{ border-left-color:var(--cat-lecture); }
 li.agenda__row.is-past{ opacity:.5; }
 li.agenda__row.is-current{ background:var(--surface-2); font-weight:700; }
 li.agenda__row.is-removed{ opacity:.4; text-decoration:line-through; }
@@ -233,6 +236,7 @@ li.row[data-cat="work"]{ border-left-color:var(--cat-work); }
 li.row[data-cat="exercise"]{ border-left-color:var(--cat-exercise); }
 li.row[data-cat="rest"]{ border-left-color:var(--cat-rest); }
 li.row[data-cat="other"]{ border-left-color:var(--cat-other); }
+li.row[data-cat="lecture"]{ border-left-color:var(--cat-lecture); }
 
 .chip-time{ flex:none; min-width:46px; text-align:left; font-size:12.5px; font-weight:700; color:var(--muted); padding-top:2px; }
 .chip-time.empty{ visibility:hidden; }
@@ -405,6 +409,14 @@ li.block-item.dragging{
 .field-row--meal input[type="checkbox"]{ width:19px; height:19px; accent-color:var(--accent); flex:none; }
 .field-row--meal input[type="time"]{ flex:none; width:auto; }
 .field-row--meal input[type="time"]:disabled{ opacity:.45; }
+/* 강의 시간표 붙여넣기 칸 */
+.lecture-input{
+  width:100%; min-height:96px; padding:10px 12px; border-radius:10px;
+  border:1px solid var(--rule); background:var(--surface); color:var(--ink);
+  font-family:"D2Coding","SF Mono","Consolas","Menlo",monospace; font-size:13px; line-height:1.7;
+  resize:vertical;
+}
+.sheet-note.is-error{ color:var(--red); font-weight:700; }
 /* 끼니별 식단 후보 묶음 */
 .pool-row{ display:flex; flex-direction:column; gap:6px; margin-bottom:10px; }
 .pool-row h4{ margin:0; font-size:12.5px; font-weight:700; color:var(--muted); }

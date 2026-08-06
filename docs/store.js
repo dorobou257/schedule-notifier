@@ -35,7 +35,8 @@ export function defaultStore() {
     //   categories[blockId]: 오늘만 이 블록을 다른 성격으로 취급(집필↔작업)
     //   showRoutine: 특별 일정이 있는 날에도 루틴을 펼쳐서 볼지
     //   unpinned: 오늘만 시각 고정을 푼 블록들(끌어서 옮긴 점심·강의 등)
-    dayTweaks: { date: null, categories: {}, showRoutine: false, unpinned: [] },
+    //   skippedLectures: 오늘만 없는 강의(휴강·보강)
+    dayTweaks: { date: null, categories: {}, showRoutine: false, unpinned: [], skippedLectures: [] },
     // 소설 일정 ↔ 집필 블록 배정. map[blockId] = 소설 항목 키(사용자가 직접 지정),
     // excluded = 어디에도 배정하지 않기로 한 항목 키들. 둘 다 해당 없는 항목은
     // 남은 집필 블록에 순서대로 자동 배정된다. 날짜가 바뀌면 통째로 비운다.
@@ -47,6 +48,11 @@ export function defaultStore() {
     // 최근에 뭘 먹었는지. 같은 메뉴가 연달아 나오지 않게 하는 데만 쓰므로
     // 오래 들고 있을 이유가 없다(MEAL_HISTORY_DAYS일치만 남긴다).
     mealHistory: [],
+    // 강의 시간표. blocks와 따로 두는 이유: 학기마다 통째로 갈아끼우는데,
+    // 사용자가 손봐온 루틴까지 같이 덮으면 안 된다.
+    lectures: [],
+    // 학기 기간. 비워두면 "항상"으로 본다 — 적지 않아도 쓸 수 있어야 한다.
+    semester: { start: null, end: null },
   };
 }
 
@@ -92,6 +98,7 @@ export function migrate(parsed) {
             categories: p.dayTweaks.categories,
             showRoutine: !!p.dayTweaks.showRoutine,
             unpinned: Array.isArray(p.dayTweaks.unpinned) ? p.dayTweaks.unpinned : [],
+            skippedLectures: Array.isArray(p.dayTweaks.skippedLectures) ? p.dayTweaks.skippedLectures : [],
           }
         : base.dayTweaks,
     novelAssign:
@@ -114,6 +121,13 @@ export function migrate(parsed) {
     mealHistory: Array.isArray(p.mealHistory)
       ? p.mealHistory.filter((m) => m && typeof m.date === "string" && typeof m.text === "string")
       : [],
+    lectures: Array.isArray(p.lectures)
+      ? p.lectures.filter((l) => l && typeof l.name === "string" && Array.isArray(l.days) && typeof l.start === "string")
+      : [],
+    semester:
+      p.semester && typeof p.semester === "object"
+        ? { start: p.semester.start || null, end: p.semester.end || null }
+        : base.semester,
   };
 }
 
@@ -190,7 +204,7 @@ export function rolloverIfStale(now) {
   }
   // 집필↔작업 교체도, 시각 고정 해제도 오늘 하루짜리 — 내일은 원래 루틴이다.
   if (store.dayTweaks.date !== todayKey) {
-    store.dayTweaks = { date: todayKey, categories: {}, showRoutine: false, unpinned: [] };
+    store.dayTweaks = { date: todayKey, categories: {}, showRoutine: false, unpinned: [], skippedLectures: [] };
     saveStore(true);
   }
   // 어제 먹은 걸 오늘 화면에 띄워둘 이유는 없다. 다만 기록으로는 남겨둔다 —

@@ -31,11 +31,20 @@ import {
   resolveNovelAssignments,
 } from "./novel-assign.js";
 import { enableDragReorder, enableLongPress, isDragging } from "./drag.js";
+import {
+  DAY_NAMES,
+  LECTURE_CATEGORY,
+  lectureBlocks,
+  mergeLectureBlocks,
+  parseLectures,
+  formatLectureLine,
+  isWithinSemester,
+} from "./lectures.js";
 
 const WEEKDAY_NAMES = ["월요일", "화요일", "수요일", "목요일", "금요일", "토요일", "일요일"];
 
 // 블록 category(한글) → CSS data-cat 키(5색). 노션 태그도 같은 5색을 공유한다.
-const ROUTINE_CAT = { "집필": "write", "작업": "work", "운동": "exercise", "여유": "rest", "식사": "rest", "기타": "other" };
+const ROUTINE_CAT = { "집필": "write", "작업": "work", "운동": "exercise", "여유": "rest", "식사": "rest", "기타": "other", "강의": "lecture" };
 const TODO_CAT = { "할일": "work", "과제": "write" };
 const NOVEL_STAGE_CAT = { "설정": "other", "시놉시스": "work", "트리트먼트": "work", "초고": "write", "퇴고": "rest", "연재": "exercise" };
 
@@ -163,6 +172,35 @@ function recentMeals(blockId, days) {
     .map((m) => m.text);
 }
 
+/** 오늘이 공휴일인지(노션의 공휴일 체크박스 기준). 이 날은 강의를 빼고 알려준다. */
+function isHolidayToday() {
+  return !!(state.todayData?.holiday_names || []).length;
+}
+
+/** 오늘 하루만 "강의 없음"으로 꺼둔 강의 id 집합(휴강·보강 대응). */
+function skippedLecturesToday() {
+  return new Set(store.dayTweaks.skippedLectures || []);
+}
+
+/**
+ * 루틴 블록에 오늘치 강의를 끼워 넣은 배열.
+ *
+ * 강의는 store.blocks가 아니라 store.lectures에 따로 산다(학기마다 통째로
+ * 갈아끼우는데 사용자가 손봐온 루틴까지 덮으면 안 되므로). 배치 직전에
+ * 시각에 맞는 자리로 합친다(mergeLectureBlocks 참고).
+ */
+function withLectures(now, dayBoundaryHour) {
+  const skipped = skippedLecturesToday();
+  const lectures = lectureBlocks(store.lectures, {
+    dateKey: logicalDateKey(now, dayBoundaryHour),
+    semester: store.semester,
+    isHoliday: isHolidayToday(),
+    dayBoundaryHour,
+  }).filter((b) => !skipped.has(b.id));
+
+  return mergeLectureBlocks(store.blocks, lectures);
+}
+
 /** 오늘만 시각 고정을 푼 블록 id 집합. 취침(sleep)은 절대 여기 들어오지 않는다 —
  *  "취침은 밀리지 않는다"가 이 앱의 기본 약속이라 하루의 끝은 언제나 고정이다. */
 function unpinnedToday() {
@@ -180,7 +218,7 @@ function computeForToday(now, protectedIds) {
   // 오늘만 성격을 바꾼 블록(집필↔작업)을 여기서 갈아끼운다 — 루틴 자체는 건드리지 않는다.
   const swaps = store.dayTweaks.categories || {};
   const unpinned = unpinnedToday();
-  const blocks = store.blocks.map((b) => {
+  const blocks = withLectures(now, dayBoundaryHour).map((b) => {
     const category = swaps[b.id] && swaps[b.id] !== b.category ? swaps[b.id] : null;
     const unpin = unpinned.has(b.id) && b.anchor === "clock";
     if (!overrides.has(b.id) && !category && !unpin) return b;
@@ -391,7 +429,13 @@ function renderMain(now) {
   if (d.holiday_names && d.holiday_names.length) {
     const banner = el("div", { className: "banner banner--holiday" });
     banner.innerHTML = ICONS.holiday;
-    banner.appendChild(el("span", { textContent: "오늘은 공휴일입니다: " + d.holiday_names.join(", ") }));
+    // 학기 중이면 "그래서 오늘은 강의가 없다"까지 한 번에 알려준다.
+    const inSemester = store.lectures.length && isWithinSemester(logicalDateKey(now, store.settings.dayBoundaryHour), store.semester);
+    banner.appendChild(
+      el("span", {
+        textContent: "오늘은 공휴일입니다: " + d.holiday_names.join(", ") + (inSemester ? " — 강의가 없습니다" : ""),
+      })
+    );
     app.appendChild(banner);
   }
 
@@ -423,6 +467,41 @@ function renderMain(now) {
     const undoBtn = el("button", { className: "banner-link", textContent: "시각 되돌리기" });
     undoBtn.addEventListener("click", () => {
       store.dayTweaks.unpinned = [];
+      saveStore(true);
+      renderShell();
+    });
+    banner.appendChild(undoBtn);
+    app.appendChild(banner);
+  }
+
+  // 시각이 고정된 블록이 제 시각에 못 앉았다면 앞의 블록과 겹친 것이다.
+  // 강의가 조용히 밀리면 수업에 늦으므로 반드시 드러낸다(점심 13:00 + 강의
+  // 13:00이 전형적인 경우다 — 이럴 땐 식사 시간을 옮겨야 한다).
+  const pushed = (state.computed.blocks || []).filter(
+    (b) => b.anchor === "clock" && b.fixedAt != null && b.start !== b.fixedAt
+  );
+  if (pushed.length) {
+    const banner = el("div", { className: "banner banner--holiday" });
+    const 목록 = pushed
+      .map((b) => `${b.name} ${boundaryMinutesToHHMM(b.fixedAt, store.settings.dayBoundaryHour)}→${boundaryMinutesToHHMM(b.start, store.settings.dayBoundaryHour)}`)
+      .join(", ");
+    banner.appendChild(el("span", { textContent: `시각이 겹쳐 밀렸습니다: ${목록}` }));
+    banner.appendChild(el("span", { className: "spacer" }));
+    const fixBtn = el("button", { className: "banner-link", textContent: "시간 조정" });
+    fixBtn.addEventListener("click", openSettingsSheet);
+    banner.appendChild(fixBtn);
+    app.appendChild(banner);
+  }
+
+  // 휴강으로 꺼둔 강의도 되돌릴 길을 열어둔다.
+  const skippedCount = skippedLecturesToday().size;
+  if (skippedCount) {
+    const banner = el("div", { className: "banner banner--adjust" });
+    banner.appendChild(el("span", { textContent: `오늘 강의 ${skippedCount}개를 뺐습니다.` }));
+    banner.appendChild(el("span", { className: "spacer" }));
+    const undoBtn = el("button", { className: "banner-link", textContent: "강의 되돌리기" });
+    undoBtn.addEventListener("click", () => {
+      store.dayTweaks.skippedLectures = [];
       saveStore(true);
       renderShell();
     });
@@ -650,6 +729,8 @@ function renderAgenda(now) {
     const freed = unpinned.has(b.id);
     if (freed) li.classList.add("is-unpinned");
     if (!reordering && (b.category === "집필" || b.category === "작업")) li.dataset.swappable = "1";
+    // 강의는 꾹 눌러 "오늘은 휴강"으로 끈다(보강·공강 대응).
+    if (!reordering && b.category === LECTURE_CATEGORY) li.dataset.lecture = "1";
     li.appendChild(el("span", { className: "agenda__time mono", textContent: boundaryMinutesToHHMM(b.start, dayBoundaryHour) }));
     const body = el("div", { className: "agenda__body" });
     body.appendChild(el("span", { className: "agenda__name", textContent: b.name }));
@@ -657,6 +738,8 @@ function renderAgenda(now) {
     if (freed) body.appendChild(el("span", { className: "agenda__swap", textContent: "오늘만 시간 자유" }));
     const novel = state.novelAssignments.get(b.id);
     if (novel) body.appendChild(el("span", { className: "agenda__novel", textContent: novelLabel(novel) }));
+    // 강의는 강의실을 같은 자리에 적어준다.
+    if (b.place) body.appendChild(el("span", { className: "agenda__novel", textContent: b.place }));
     // 식사 블록엔 오늘의 식단을 소설 배정과 같은 자리에 한 줄로 붙인다.
     if (isMealBlock(b)) {
       const menu = mealOf(b.id);
@@ -707,6 +790,7 @@ function renderAgenda(now) {
   } else {
     // 순서 편집이 아닐 때의 꾹 누르기 — 집필↔작업을 오늘만 맞바꾼다.
     enableLongPress(ul, 'li.agenda__row[data-swappable="1"]', (li) => openCategorySwapSheet(li.dataset.id));
+    enableLongPress(ul, 'li.agenda__row[data-lecture="1"]', (li) => openLectureSkipSheet(li.dataset.id));
     // 식사 블록은 탭 한 번으로 식단을 적는다(꾹 누를 일이 아니다).
     ul.addEventListener("click", (e) => {
       const li = e.target.closest('li.agenda__row[data-meal="1"]');
@@ -1457,6 +1541,30 @@ function selectField(options, current) {
   return select;
 }
 
+/** 오늘 이 강의가 없다고(휴강·공강) 표시하는 시트. 내일은 원래대로 돌아온다. */
+function openLectureSkipSheet(lectureId) {
+  const b = state.computed.blocks.find((x) => x.id === lectureId);
+  if (!b) return;
+  state.activeSheet = "lecture";
+
+  const skipBtn = el("button", { className: "btn btn--primary", textContent: "오늘은 휴강" });
+  skipBtn.addEventListener("click", () => {
+    store.dayTweaks.skippedLectures = [...skippedLecturesToday(), lectureId];
+    saveStore(true);
+    closeSheet();
+    renderShell();
+  });
+  const cancelBtn = el("button", { className: "btn btn--ghost", textContent: "닫기" });
+  cancelBtn.addEventListener("click", closeSheet);
+
+  openSheet(
+    b.name,
+    `${boundaryMinutesToHHMM(b.start, store.settings.dayBoundaryHour)}${b.place ? ` · ${b.place}` : ""}`,
+    [el("p", { className: "sheet-note", textContent: "오늘 하루만 빠지고 내일은 그대로 돌아옵니다. 그 시간은 다른 블록이 채웁니다." })],
+    [cancelBtn, skipBtn]
+  );
+}
+
 /** 오늘의 식단을 적는 시트. 후보에서 고르거나 직접 쓴다. */
 function openMealSheet(blockId) {
   const b = state.computed.blocks.find((x) => x.id === blockId);
@@ -1621,6 +1729,49 @@ function renderSettings() {
   dropRow.classList.add("inline");
   basics.appendChild(dropRow);
 
+  // --- 강의 시간표 ---
+  // 에브리타임은 공개 API가 없고 공유 페이지도 로그인 세션이 필요해서 워커가
+  // 대신 긁어올 수 없다. 그래서 붙여넣기를 1차 경로로 둔다 — 한 학기에 한 번
+  // 하는 일이고, 형식이 단순해서 시간표를 보고 그대로 옮겨 적으면 된다.
+  const lectureGroup = el("div", { className: "settings-group" });
+  lectureGroup.appendChild(el("h3", { textContent: "강의 시간표" }));
+
+  const semStart = el("input", { type: "date", value: store.semester.start || "" });
+  const semEnd = el("input", { type: "date", value: store.semester.end || "" });
+  const semRow = el("div", { className: "field-row field-row--meal" });
+  semRow.appendChild(el("label", { textContent: "학기 기간" }));
+  semRow.appendChild(semStart);
+  semRow.appendChild(semEnd);
+  lectureGroup.appendChild(semRow);
+
+  const lectureText = el("textarea", {
+    className: "lecture-input",
+    rows: Math.max(4, store.lectures.length + 1),
+    value: store.lectures.map(formatLectureLine).join("\n"),
+    spellcheck: false,
+  });
+  lectureGroup.appendChild(lectureText);
+  lectureGroup.appendChild(
+    el("p", {
+      className: "sheet-note",
+      textContent: "한 줄에 하나씩: 「월수 13:00-16:00 강의명 @강의실」 (요일은 붙여 쓰고, @장소는 생략 가능)",
+    })
+  );
+  const lectureStatus = el("p", { className: "sheet-note" });
+  lectureGroup.appendChild(lectureStatus);
+
+  const showLectureStatus = () => {
+    const { lectures, failed } = parseLectures(lectureText.value);
+    lectureStatus.textContent = failed.length
+      ? `${lectures.length}개 인식 · 읽지 못한 줄: ${failed.join(" / ")}`
+      : lectures.length
+        ? `${lectures.length}개 강의를 인식했습니다.`
+        : "";
+    lectureStatus.classList.toggle("is-error", failed.length > 0);
+  };
+  lectureText.addEventListener("input", showLectureStatus);
+  showLectureStatus();
+
   // --- 식사 시간 ---
   // 지금까진 점심만 13:00으로 박혀 있었다. 복학하면 강의에 맞춰 세 끼가 전부
   // 움직여야 하므로, 블록 편집을 열지 않고 여기서 바로 고칠 수 있게 한다.
@@ -1754,6 +1905,12 @@ function renderSettings() {
     s.dropBreakfastWhenLate = dropBreakfastInput.checked;
     s.reducePriority = order;
 
+    // 강의 시간표. 읽지 못한 줄은 버리지 않고 그대로 두어(저장 안 함) 사용자가
+    // 고칠 수 있게 한다 — 오타 한 줄 때문에 학기 전체가 날아가면 안 된다.
+    const parsed = parseLectures(lectureText.value);
+    if (!parsed.failed.length) store.lectures = parsed.lectures;
+    store.semester = { start: semStart.value || null, end: semEnd.value || null };
+
     // 식사 시각 고정은 블록 자체를 고치는 일이라 설정 저장과 함께 반영한다.
     mealTimeInputs.forEach(({ id, pin, time }) => {
       const block = store.blocks.find((b) => b.id === id);
@@ -1774,7 +1931,12 @@ function renderSettings() {
   const cancelBtn = el("button", { className: "btn btn--ghost", textContent: "닫기" });
   cancelBtn.addEventListener("click", closeSheet);
 
-  openSheet("설정", null, [editRoutineBtn, basics, mealGroup, poolGroup, priorityGroup, dataGroup], [cancelBtn, saveBtn]);
+  openSheet(
+    "설정",
+    null,
+    [editRoutineBtn, basics, lectureGroup, mealGroup, poolGroup, priorityGroup, dataGroup],
+    [cancelBtn, saveBtn]
+  );
 }
 
 function exportData() {
