@@ -34,7 +34,8 @@ export function defaultStore() {
     // 그날 하루만 적용되는 손질. 날짜가 바뀌면 통째로 비운다.
     //   categories[blockId]: 오늘만 이 블록을 다른 성격으로 취급(집필↔작업)
     //   showRoutine: 특별 일정이 있는 날에도 루틴을 펼쳐서 볼지
-    dayTweaks: { date: null, categories: {}, showRoutine: false },
+    //   unpinned: 오늘만 시각 고정을 푼 블록들(끌어서 옮긴 점심·강의 등)
+    dayTweaks: { date: null, categories: {}, showRoutine: false, unpinned: [] },
     // 소설 일정 ↔ 집필 블록 배정. map[blockId] = 소설 항목 키(사용자가 직접 지정),
     // excluded = 어디에도 배정하지 않기로 한 항목 키들. 둘 다 해당 없는 항목은
     // 남은 집필 블록에 순서대로 자동 배정된다. 날짜가 바뀌면 통째로 비운다.
@@ -62,6 +63,7 @@ export function migrate(parsed) {
             date: p.dayTweaks.date || null,
             categories: p.dayTweaks.categories,
             showRoutine: !!p.dayTweaks.showRoutine,
+            unpinned: Array.isArray(p.dayTweaks.unpinned) ? p.dayTweaks.unpinned : [],
           }
         : base.dayTweaks,
     novelAssign:
@@ -141,9 +143,9 @@ export function rolloverIfStale(now) {
     store.novelAssign = { date: todayKey, map: {}, excluded: [] };
     saveStore(true);
   }
-  // 집필↔작업 교체도 오늘 하루짜리 — 내일은 원래 루틴으로 돌아간다.
+  // 집필↔작업 교체도, 시각 고정 해제도 오늘 하루짜리 — 내일은 원래 루틴이다.
   if (store.dayTweaks.date !== todayKey) {
-    store.dayTweaks = { date: todayKey, categories: {}, showRoutine: false };
+    store.dayTweaks = { date: todayKey, categories: {}, showRoutine: false, unpinned: [] };
     saveStore(true);
   }
   return sleepReset;

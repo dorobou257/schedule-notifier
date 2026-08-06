@@ -115,6 +115,12 @@ function getSleepOverrideMinutes(now, dayBoundaryHour) {
   return dateToBoundaryMinutes(new Date(store.today.bedAt), dayBoundaryHour);
 }
 
+/** 오늘만 시각 고정을 푼 블록 id 집합. 취침(sleep)은 절대 여기 들어오지 않는다 —
+ *  "취침은 밀리지 않는다"가 이 앱의 기본 약속이라 하루의 끝은 언제나 고정이다. */
+function unpinnedToday() {
+  return new Set(store.dayTweaks.unpinned || []);
+}
+
 /** protectedIds: 제안 시트에서 사용자가 체크 해제해 "오늘은 지키자"고 정한 블록 id 집합.
  * 커밋된 값은 store.today.protectedOverrides, 시트 안에서 토글하는 동안은 임시 값을 넘긴다. */
 function computeForToday(now, protectedIds) {
@@ -125,10 +131,18 @@ function computeForToday(now, protectedIds) {
   const overrides = protectedIds || new Set(store.today.protectedOverrides || []);
   // 오늘만 성격을 바꾼 블록(집필↔작업)을 여기서 갈아끼운다 — 루틴 자체는 건드리지 않는다.
   const swaps = store.dayTweaks.categories || {};
+  const unpinned = unpinnedToday();
   const blocks = store.blocks.map((b) => {
     const category = swaps[b.id] && swaps[b.id] !== b.category ? swaps[b.id] : null;
-    if (!overrides.has(b.id) && !category) return b;
-    return { ...b, ...(overrides.has(b.id) ? { protected: true } : {}), ...(category ? { category } : {}) };
+    const unpin = unpinned.has(b.id) && b.anchor === "clock";
+    if (!overrides.has(b.id) && !category && !unpin) return b;
+    const next = { ...b, ...(overrides.has(b.id) ? { protected: true } : {}), ...(category ? { category } : {}) };
+    if (unpin) {
+      // 오늘만 시각 고정을 푼 블록 — 유동 블록처럼 앞뒤에 붙어 흘러간다.
+      delete next.anchor;
+      delete next.fixedAt;
+    }
+    return next;
   });
   const settings = {
     ...store.settings,
@@ -351,6 +365,23 @@ function renderMain(now) {
     app.appendChild(renderPendingSleepBanner());
   }
 
+  // 시각 고정을 푼 블록이 있으면 되돌릴 길을 열어둔다. 강의를 실수로 끌었을 때
+  // 되돌릴 방법이 없으면 그날 시간표가 통째로 어긋난 채 남는다.
+  const freedCount = unpinnedToday().size;
+  if (freedCount) {
+    const banner = el("div", { className: "banner banner--adjust" });
+    banner.appendChild(el("span", { textContent: `시각이 정해진 블록 ${freedCount}개를 오늘만 자유롭게 옮겼습니다.` }));
+    banner.appendChild(el("span", { className: "spacer" }));
+    const undoBtn = el("button", { className: "banner-link", textContent: "시각 되돌리기" });
+    undoBtn.addEventListener("click", () => {
+      store.dayTweaks.unpinned = [];
+      saveStore(true);
+      renderShell();
+    });
+    banner.appendChild(undoBtn);
+    app.appendChild(banner);
+  }
+
   // 노션에 종류="일정"으로 등록한 날은 그날 하루를 통째로 그 일정에 내주는 게
   // 기본이다(루틴 숨김). 다만 그런 날에도 루틴을 참고하고 싶을 때가 있으니
   // 직접 펼쳐볼 수 있게 해둔다 — 어디까지나 내가 꺼낼 때만.
@@ -534,44 +565,70 @@ function renderAgenda(now) {
   head.appendChild(reorderBtn);
   wrap.appendChild(head);
 
+  // 기상/취침은 길이 0짜리 "하루의 시작·끝" 표지일 뿐이라 목록에 넣지 않는다.
+  // 잠긴 행으로 보여줘 봤자 끌 수도 없고 자리만 차지한다 — 대신 목록 위아래에
+  // 얇은 캡션으로 시각만 적어 둔다.
+  const endpoint = (b) => b.anchor === "wake" || b.anchor === "sleep";
+  const rows = blocks.filter((b) => !endpoint(b));
+  const wakeBlock = blocks.find((b) => b.anchor === "wake");
+  const sleepBlock = blocks.find((b) => b.anchor === "sleep");
+  const caption = (b, label) =>
+    el("p", {
+      className: "agenda__endpoint",
+      textContent: `${boundaryMinutesToHHMM(b.start, dayBoundaryHour)} ${label}`,
+    });
+
+  const unpinned = unpinnedToday();
   const ul = el("ul", { className: "agenda__list" + (reordering ? " is-reordering" : "") });
   const upcomingCount = 5;
-  const startIdx = currentIdx === -1 ? 0 : currentIdx;
-  const visible = reordering || state.agendaExpanded ? blocks : blocks.slice(startIdx, startIdx + upcomingCount);
+  const currentRowIdx = rows.findIndex((b) => b === blocks[currentIdx]);
+  const startIdx = currentRowIdx === -1 ? 0 : currentRowIdx;
+  const visible = reordering || state.agendaExpanded ? rows : rows.slice(startIdx, startIdx + upcomingCount);
+
+  if (wakeBlock && (reordering || state.agendaExpanded || startIdx === 0)) wrap.appendChild(caption(wakeBlock, "기상"));
 
   visible.forEach((b) => {
-    const realIdx = blocks.indexOf(b);
-    // 기상/취침/시각 고정(점심)은 하루의 뼈대라 순서를 바꿀 수 없다 — 다른
-    // 블록이 이 지점을 넘어가지도 못하게 "벽"으로 표시한다(enableDragReorder).
-    const fixed = b.anchor === "wake" || b.anchor === "sleep" || b.anchor === "clock";
     const li = el("li", {
       className: "agenda__row",
-      dataset: { cat: ROUTINE_CAT[b.category] || "other", id: b.id, ...(fixed ? { fixed: "1" } : {}) },
+      dataset: { cat: ROUTINE_CAT[b.category] || "other", id: b.id },
     });
-    if (b.minutes === 0 && b.anchor !== "wake" && b.anchor !== "sleep") li.classList.add("is-removed");
-    if (realIdx === currentIdx) li.classList.add("is-current");
+    if (b.minutes === 0) li.classList.add("is-removed");
+    if (b === blocks[currentIdx]) li.classList.add("is-current");
     else if (b.end <= nowMinutes) li.classList.add("is-past");
-    if (reordering && fixed) li.classList.add("is-locked");
     // 오늘만 성격을 바꾼 블록인지 — 꾹 눌러 집필↔작업을 맞바꾼 경우.
     const swapped = !!store.dayTweaks.categories[b.id];
     if (swapped) li.classList.add("is-swapped");
+    // 오늘만 시각 고정을 푼 블록인지 — 끌어서 옮긴 점심·강의.
+    const freed = unpinned.has(b.id);
+    if (freed) li.classList.add("is-unpinned");
     if (!reordering && (b.category === "집필" || b.category === "작업")) li.dataset.swappable = "1";
     li.appendChild(el("span", { className: "agenda__time mono", textContent: boundaryMinutesToHHMM(b.start, dayBoundaryHour) }));
     const body = el("div", { className: "agenda__body" });
     body.appendChild(el("span", { className: "agenda__name", textContent: b.name }));
     if (swapped) body.appendChild(el("span", { className: "agenda__swap", textContent: `오늘만 ${b.category}` }));
+    if (freed) body.appendChild(el("span", { className: "agenda__swap", textContent: "오늘만 시간 자유" }));
     const novel = state.novelAssignments.get(b.id);
     if (novel) body.appendChild(el("span", { className: "agenda__novel", textContent: novelLabel(novel) }));
     li.appendChild(body);
-    if (reordering && !fixed) li.appendChild(el("span", { className: "agenda__grip", innerHTML: ICONS.grip }));
+    if (reordering) li.appendChild(el("span", { className: "agenda__grip", innerHTML: ICONS.grip }));
     ul.appendChild(li);
   });
   wrap.appendChild(ul);
 
+  if (sleepBlock && (reordering || state.agendaExpanded || visible.includes(rows[rows.length - 1]))) {
+    wrap.appendChild(caption(sleepBlock, "취침"));
+  }
+
   if (reordering) {
     enableDragReorder(
       ul,
-      (order) => {
+      (order, movedId) => {
+        // 시각이 고정된 블록을 직접 끌었다면 오늘 하루만 그 고정을 푼다.
+        // 점심 시간을 강의에 맞춰 옮기거나, 휴강한 강의를 치울 때 쓰는 동작이다.
+        const moved = store.blocks.find((b) => b.id === movedId);
+        if (moved && moved.anchor === "clock" && !unpinned.has(movedId)) {
+          store.dayTweaks.unpinned = [...(store.dayTweaks.unpinned || []), movedId];
+        }
         store.blocks = applyVisibleOrder(store.blocks, order);
         saveStore(true);
         // 안착 애니메이션이 끝난 뒤에 다시 그린다 — 곧바로 갈아끼우면
@@ -582,14 +639,18 @@ function renderAgenda(now) {
       "li.agenda__row"
     );
     wrap.appendChild(
-      el("p", { className: "agenda__hint", textContent: "블록을 꾹 눌러 끌면 순서가 바뀝니다. 기상·점심·취침은 고정입니다." })
+      el("p", {
+        className: "agenda__hint",
+        textContent:
+          "블록을 꾹 눌러 끌면 순서가 바뀝니다. 시각이 정해진 블록은 제 시각으로 돌아가고, 직접 끌면 오늘 하루만 자유롭게 놓입니다.",
+      })
     );
   } else {
     // 순서 편집이 아닐 때의 꾹 누르기 — 집필↔작업을 오늘만 맞바꾼다.
     enableLongPress(ul, 'li.agenda__row[data-swappable="1"]', (li) => openCategorySwapSheet(li.dataset.id));
   }
 
-  if (!reordering && blocks.length > upcomingCount) {
+  if (!reordering && rows.length > upcomingCount) {
     const toggle = el("button", {
       className: "agenda__toggle",
       textContent: state.agendaExpanded ? "접기" : "전체 보기",

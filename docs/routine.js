@@ -180,6 +180,44 @@ export function applyVisibleOrder(blocks, visibleIds) {
 }
 
 /**
+ * 시각이 고정된 블록(clock/sleep 앵커)들을 시각 순서대로 되돌려 놓는다.
+ *
+ * 아래 배치 로직은 배열에 나온 순서대로 앵커를 처리하고, 앵커의 고정 시각이
+ * 커서보다 앞이면 그 구간을 통째로 비운다. 시각 고정 블록이 점심 하나뿐일 땐
+ * 어긋날 일이 없었지만, 강의처럼 여러 개가 생기고 사용자가 메인 화면에서
+ * 순서를 자유롭게 바꾸면 "배열 순서 ≠ 시각 순서"가 되어 하루가 지워진다.
+ *
+ * 그래서 앵커가 놓인 자리들만 모아 시각 순으로 다시 꽂는다. 유동 블록끼리의
+ * 상대 순서는 건드리지 않는다 — 사용자가 정한 순서가 곧 그날의 흐름이다.
+ * (기상 앵커는 하루의 시작점이라 정렬에서 제외한다.)
+ *
+ * @param {Array} work 오늘치 블록(이미 복사된 것)
+ * @param {number|null} sleepMinutes 오늘 밤 실제 취침 시각. 있으면 취침 앵커는 이 값으로 비교한다.
+ */
+function sortAnchorsByTime(work, sleepMinutes) {
+  const isTimed = (b) => b.anchor === "clock" || b.anchor === "sleep";
+  const timeOf = (b) => (b.anchor === "sleep" && sleepMinutes != null ? sleepMinutes : b.fixedAt);
+
+  const slots = [];
+  const anchors = [];
+  work.forEach((b, i) => {
+    if (!isTimed(b)) return;
+    slots.push(i);
+    anchors.push(b);
+  });
+  if (anchors.length < 2) return work; // 하나면 정렬할 게 없다
+
+  // 고정 시각이 없는 앵커(비정상)는 원래 자리를 지키도록 맨 뒤로 보낸다.
+  anchors.sort((a, b) => (timeOf(a) ?? Infinity) - (timeOf(b) ?? Infinity));
+
+  const out = work.slice();
+  slots.forEach((slot, i) => {
+    out[slot] = anchors[i];
+  });
+  return out;
+}
+
+/**
  * 하루치 블록 목록을 실제 기상 시각에 맞춰 재배치한다. 부작용 없는 순수 함수.
  *
  * 핵심 아이디어: anchor:"clock"/"sleep" 블록을 경계로 하루를 세그먼트로
@@ -204,7 +242,10 @@ export function computeSchedule({ blocks = BASE_BLOCKS, settings = DEFAULT_SETTI
 
   // 오늘 반복 대상이 아닌 블록(예: 화/목의 운동)은 애초에 하루에서 빠진다.
   // 깊은 복사를 해서 호출자의 blocks 배열/객체를 절대 변형하지 않는다.
-  const work = blocks.filter((b) => !b.days || b.days.includes(weekday)).map((b) => ({ ...b }));
+  const work = sortAnchorsByTime(
+    blocks.filter((b) => !b.days || b.days.includes(weekday)).map((b) => ({ ...b })),
+    sleepMinutes
+  );
 
   const adjustments = [];
   const warnings = [];

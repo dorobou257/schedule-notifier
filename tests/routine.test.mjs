@@ -285,3 +285,91 @@ test("applyVisibleOrder: 실제 BASE_BLOCKS에서 유동 블록만 뒤집어도 
   assert.equal(result.indexOf("lunch"), BASE_BLOCKS.findIndex((b) => b.id === "lunch"));
   assert.ok(result.indexOf("buffer") < result.indexOf("session1"));
 });
+
+// ---------------------------------------------------------------
+// 시각 고정 앵커 정렬
+//
+// 강의가 들어오면 clock 앵커가 여러 개가 되고, 메인 화면에서 순서를 자유롭게
+// 바꿀 수 있게 되면서 "배열 순서 ≠ 시각 순서"가 될 수 있다. 예전 코드는 배열
+// 순서대로 앵커를 처리하다가 고정 시각이 커서보다 앞이면 그 구간을 통째로
+// 비워버렸다 — 강의 하나 잘못 끌면 하루가 사라진다는 뜻이다.
+// ---------------------------------------------------------------
+
+const at = (hhmm) => hhmmToBoundaryMinutes(hhmm);
+
+/** 강의 두 개가 낀 하루. 배열 순서는 인자로 받아 뒤섞을 수 있게 한다. */
+function dayWithLectures(order) {
+  const byId = {
+    wake: { id: "wake", name: "기상", category: "기타", minutes: 0, anchor: "wake", protected: true },
+    lec1: { id: "lec1", name: "자료구조", category: "강의", minutes: 75, minMinutes: 75, protected: true, anchor: "clock", fixedAt: at("10:00") },
+    lec2: { id: "lec2", name: "알고리즘", category: "강의", minutes: 75, minMinutes: 75, protected: true, anchor: "clock", fixedAt: at("15:00") },
+    lunch: { id: "lunch", name: "점심 식사", category: "식사", minutes: 60, minMinutes: 60, protected: true, anchor: "clock", fixedAt: at("13:00") },
+    buffer: { id: "buffer", name: "여유", category: "여유", minutes: 60, minMinutes: 0 },
+    rest: { id: "rest", name: "휴식", category: "여유", minutes: 60, minMinutes: 0 },
+    sleep: { id: "sleep", name: "취침", category: "기타", minutes: 0, protected: true, anchor: "sleep", fixedAt: at("00:30") },
+  };
+  return order.map((id) => byId[id]);
+}
+
+const startOf = (r, id) => boundaryMinutesToHHMM(byId(r, id).start);
+
+test("시각 고정 블록은 배열 순서가 뒤섞여도 제 시각에 배치된다", () => {
+  const 정순 = ["wake", "buffer", "lec1", "lunch", "lec2", "rest", "sleep"];
+  const 뒤섞임 = ["wake", "buffer", "lec2", "lunch", "lec1", "rest", "sleep"]; // 강의 둘의 자리를 바꿈
+
+  const opts = { settings: DEFAULT_SETTINGS, weekday: MON, wakeMinutes: at("08:00") };
+  const a = computeSchedule({ ...opts, blocks: dayWithLectures(정순) });
+  const b = computeSchedule({ ...opts, blocks: dayWithLectures(뒤섞임) });
+
+  for (const r of [a, b]) {
+    assert.equal(startOf(r, "lec1"), "10:00");
+    assert.equal(startOf(r, "lunch"), "13:00");
+    assert.equal(startOf(r, "lec2"), "15:00");
+    assert.equal(r.warnings.length, 0, "하루가 비어버리면 안 된다");
+  }
+  assert.deepEqual(ids(a.blocks), ids(b.blocks), "결과 배치는 같아야 한다");
+});
+
+test("앵커를 뒤집어도 유동 블록끼리의 순서는 사용자가 정한 대로 유지된다", () => {
+  const blocks = dayWithLectures(["wake", "rest", "lec2", "lunch", "lec1", "buffer", "sleep"]);
+  const r = computeSchedule({ blocks, settings: DEFAULT_SETTINGS, weekday: MON, wakeMinutes: at("08:00") });
+
+  const 유동 = ids(r.blocks).filter((id) => id === "rest" || id === "buffer");
+  assert.deepEqual(유동, ["rest", "buffer"], "휴식이 여유보다 앞이라는 사용자 순서는 그대로");
+  assert.equal(startOf(r, "lec1"), "10:00");
+  assert.equal(startOf(r, "lec2"), "15:00");
+});
+
+test("앵커가 하나뿐이면 정렬이 아무것도 바꾸지 않는다(기존 루틴 그대로)", () => {
+  const r = computeSchedule({
+    blocks: BASE_BLOCKS,
+    settings: DEFAULT_SETTINGS,
+    weekday: MON,
+    wakeMinutes: at("08:00"),
+  });
+  assert.equal(startOf(r, "lunch"), "13:00");
+  assert.equal(startOf(r, "sleep"), "00:30");
+  assert.equal(r.adjustments.length, 0);
+});
+
+test("취침을 미루면 취침 앵커도 새 시각 기준으로 자리를 잡는다", () => {
+  // sleepMinutes(02:00)가 들어오면 취침은 lec2(15:00)보다 뒤라는 판단이 유지돼야 한다.
+  const blocks = dayWithLectures(["wake", "buffer", "lec1", "lunch", "lec2", "rest", "sleep"]);
+  const r = computeSchedule({
+    blocks,
+    settings: DEFAULT_SETTINGS,
+    weekday: MON,
+    wakeMinutes: at("08:00"),
+    sleepMinutes: at("02:00"),
+  });
+  assert.equal(startOf(r, "sleep"), "02:00");
+  assert.equal(startOf(r, "lec2"), "15:00");
+  assert.equal(r.warnings.length, 0);
+});
+
+test("정렬은 호출자의 배열을 변형하지 않는다", () => {
+  const blocks = dayWithLectures(["wake", "buffer", "lec2", "lunch", "lec1", "rest", "sleep"]);
+  const before = ids(blocks);
+  computeSchedule({ blocks, settings: DEFAULT_SETTINGS, weekday: MON, wakeMinutes: at("08:00") });
+  assert.deepEqual(ids(blocks), before);
+});

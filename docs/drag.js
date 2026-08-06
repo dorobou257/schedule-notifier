@@ -250,7 +250,9 @@ export function enableDragReorder(listEl, onReorder, onTap, itemSelector = "li.b
           easing: "cubic-bezier(.2,.8,.2,1)",
         });
       }
-      onReorder(items().map((x) => x.dataset.id));
+      // 새 순서와 함께 "무엇을 끌었는지"도 넘긴다 — 시각 고정 블록을 옮겼을
+      // 땐 화면 쪽이 그 사실을 알아야 오늘만 고정을 풀어줄 수 있다.
+      onReorder(items().map((x) => x.dataset.id), id);
     } else {
       cleanupVisual();
       onTap(id);

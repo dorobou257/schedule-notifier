@@ -56,6 +56,7 @@ test("migrate: dayTweaks.categories가 없으면 통째로 기본값", () => {
     date: null,
     categories: {},
     showRoutine: false,
+    unpinned: [],
   });
 });
 
@@ -123,7 +124,7 @@ test("롤오버: 하루가 바뀌면 오늘만 적용되던 손질과 소설 배
 
   // 다음날이 되면 원래 루틴으로 돌아간다.
   rolloverIfStale(at(2026, 8, 7, 9, 0));
-  assert.deepEqual(store.dayTweaks, { date: "2026-08-07", categories: {}, showRoutine: false });
+  assert.deepEqual(store.dayTweaks, { date: "2026-08-07", categories: {}, showRoutine: false, unpinned: [] });
   assert.deepEqual(store.novelAssign, { date: "2026-08-07", map: {}, excluded: [] });
 });
 
@@ -136,7 +137,7 @@ test("롤오버: 며칠을 건너뛰고 열어도 한 번에 정리된다", () =
   // 일주일 뒤에 앱을 연다(여행 다녀온 뒤 같은 상황).
   assert.equal(rolloverIfStale(at(2026, 8, 9, 10, 0)), true);
   assert.deepEqual(store.today, emptySleep());
-  assert.deepEqual(store.dayTweaks, { date: "2026-08-09", categories: {}, showRoutine: false });
+  assert.deepEqual(store.dayTweaks, { date: "2026-08-09", categories: {}, showRoutine: false, unpinned: [] });
 });
 
 test("롤오버: 취침 기록이 없으면 아무것도 비웠다고 하지 않는다", () => {
@@ -157,4 +158,25 @@ test("롤오버: 경계 시각을 바꾸면 하루가 갈리는 지점도 함께
   // 07:00이면 8/7로 넘어간다 — forDate와 같아지므로 아직 비우지 않는다.
   assert.equal(rolloverIfStale(at(2026, 8, 7, 7, 0)), false);
   assert.equal(store.dayTweaks.date, "2026-08-07");
+});
+
+// --- 오늘만 시각 고정 해제 -------------------------------------------------
+
+test("migrate: unpinned가 없거나 배열이 아니면 빈 배열로 채운다", () => {
+  assert.deepEqual(migrate({}).dayTweaks.unpinned, []);
+  assert.deepEqual(migrate({ dayTweaks: { categories: {}, unpinned: "망가짐" } }).dayTweaks.unpinned, []);
+  assert.deepEqual(migrate({ dayTweaks: { categories: {}, unpinned: ["lunch"] } }).dayTweaks.unpinned, ["lunch"]);
+});
+
+test("롤오버: 오늘만 푼 시각 고정도 다음날이면 원래대로 돌아온다", () => {
+  const s = freshStore();
+  rolloverIfStale(at(2026, 8, 6, 9, 0));
+  s.dayTweaks.unpinned.push("lunch", "lec1");
+
+  // 같은 날 안에서는 유지된다 — 하루 종일 옮겨둔 점심이 저녁에 되돌아가면 곤란하다.
+  rolloverIfStale(at(2026, 8, 6, 23, 0));
+  assert.deepEqual(store.dayTweaks.unpinned, ["lunch", "lec1"]);
+
+  rolloverIfStale(at(2026, 8, 7, 9, 0));
+  assert.deepEqual(store.dayTweaks.unpinned, [], "내일은 강의도 점심도 제 시각으로");
 });
