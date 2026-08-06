@@ -11,6 +11,9 @@ export const DEFAULT_SETTINGS = {
   sleepTargetMinutes: 450, // 7.5시간
   dayBoundaryHour: 4,
   dropBreakfastWhenLate: true,
+  // 학기 중에만 쓰는 식사 시각("HH:MM"). 비워두면 평소 시각 그대로다.
+  // 복학하면 점심이 13:00 강의와 부딪히는데, 방학에도 12:00에 먹을 이유는 없다.
+  semesterMeals: { breakfast: "", lunch: "", dinner: "" },
   // 부족한 시간을 회수할 때의 순서. 앞에 있을수록 먼저 줄어든다.
   // 설정 화면에서 사용자가 이 배열 순서를 바꿀 수 있다.
   reducePriority: ["여유", "운동", "작업", "집필"],

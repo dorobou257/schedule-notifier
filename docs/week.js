@@ -9,8 +9,15 @@
 // 계산은 오늘 화면과 같은 순수 함수를 그대로 쓴다. 다만 취침 기록·하루짜리
 // 손질(dayTweaks)은 오늘에만 유효하므로, 오늘은 이미 계산해둔 결과를 그대로
 // 받아 쓰고 나머지 날은 기본 기상 시각으로 계산한다.
-import { computeSchedule, hhmmToBoundaryMinutes, boundaryMinutesToHHMM } from "./routine.js";
-import { lectureBlocks, mergeLectureBlocks, LECTURE_CATEGORY, DAY_NAMES } from "./lectures.js";
+import { hhmmToBoundaryMinutes, boundaryMinutesToHHMM } from "./routine.js";
+import {
+  lectureBlocks,
+  computeDayWithLectures,
+  applySemesterMealTimes,
+  isWithinSemester,
+  LECTURE_CATEGORY,
+  DAY_NAMES,
+} from "./lectures.js";
 import { store, shiftDateKey } from "./store.js";
 import { WORKER_URL } from "./config.js";
 
@@ -80,8 +87,12 @@ export function buildWeekDays({ startKey, data, blocks, settings, lectures, seme
         isHoliday: holidayNames.length > 0,
         dayBoundaryHour,
       });
-      dayBlocks = computeSchedule({
-        blocks: mergeLectureBlocks(blocks, lecs),
+      const routine = isWithinSemester(dateKey, semester)
+        ? applySemesterMealTimes(blocks, settings.semesterMeals, dayBoundaryHour)
+        : blocks;
+      dayBlocks = computeDayWithLectures({
+        blocks: routine,
+        lectures: lecs,
         settings,
         weekday,
         wakeMinutes,

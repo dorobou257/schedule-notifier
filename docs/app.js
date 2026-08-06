@@ -1,7 +1,6 @@
 // 상태·렌더링·상호작용. routine.js의 순수 계산 결과를 화면에 붙이는 역할만
 // 한다 — 스케줄 계산 로직은 여기 두지 않는다(테스트 가능하게 분리 유지).
 import {
-  computeSchedule,
   computeWakeMinutes,
   hhmmToBoundaryMinutes,
   boundaryMinutesToHHMM,
@@ -37,7 +36,8 @@ import {
   DAY_NAMES,
   LECTURE_CATEGORY,
   lectureBlocks,
-  mergeLectureBlocks,
+  computeDayWithLectures,
+  applySemesterMealTimes,
   parseLectures,
   formatLectureLine,
   isWithinSemester,
@@ -186,22 +186,25 @@ function skippedLecturesToday() {
 }
 
 /**
- * 루틴 블록에 오늘치 강의를 끼워 넣은 배열.
+ * 오늘 실제로 듣는 강의를 블록 모양으로.
  *
  * 강의는 store.blocks가 아니라 store.lectures에 따로 산다(학기마다 통째로
- * 갈아끼우는데 사용자가 손봐온 루틴까지 덮으면 안 되므로). 배치 직전에
- * 시각에 맞는 자리로 합친다(mergeLectureBlocks 참고).
+ * 갈아끼우는데 사용자가 손봐온 루틴까지 덮으면 안 되므로). 하루와 합치는
+ * 일은 computeDayWithLectures가 한다.
  */
-function withLectures(now, dayBoundaryHour) {
+function todayLectures(now, dayBoundaryHour) {
   const skipped = skippedLecturesToday();
-  const lectures = lectureBlocks(store.lectures, {
+  return lectureBlocks(store.lectures, {
     dateKey: logicalDateKey(now, dayBoundaryHour),
     semester: store.semester,
     isHoliday: isHolidayToday(),
     dayBoundaryHour,
   }).filter((b) => !skipped.has(b.id));
+}
 
-  return mergeLectureBlocks(store.blocks, lectures);
+/** 오늘이 학기 안인지. 학기 중에만 쓰는 식사 시각을 적용할지 가른다. */
+function inSemesterToday(now, dayBoundaryHour) {
+  return isWithinSemester(logicalDateKey(now, dayBoundaryHour), store.semester);
 }
 
 /** 오늘만 시각 고정을 푼 블록 id 집합. 취침(sleep)은 절대 여기 들어오지 않는다 —
@@ -221,7 +224,10 @@ function computeForToday(now, protectedIds) {
   // 오늘만 성격을 바꾼 블록(집필↔작업)을 여기서 갈아끼운다 — 루틴 자체는 건드리지 않는다.
   const swaps = store.dayTweaks.categories || {};
   const unpinned = unpinnedToday();
-  const blocks = withLectures(now, dayBoundaryHour).map((b) => {
+  const routine = inSemesterToday(now, dayBoundaryHour)
+    ? applySemesterMealTimes(store.blocks, store.settings.semesterMeals, dayBoundaryHour)
+    : store.blocks;
+  const blocks = routine.map((b) => {
     const category = swaps[b.id] && swaps[b.id] !== b.category ? swaps[b.id] : null;
     const unpin = unpinned.has(b.id) && b.anchor === "clock";
     if (!overrides.has(b.id) && !category && !unpin) return b;
@@ -237,7 +243,16 @@ function computeForToday(now, protectedIds) {
     ...store.settings,
     dropBreakfastWhenLate: overrides.has("breakfast") ? false : store.settings.dropBreakfastWhenLate,
   };
-  return { result: computeSchedule({ blocks, settings, weekday, wakeMinutes, sleepMinutes }), wakeMinutes };
+  // 강의는 끼워 넣는 게 아니라 그 자리의 집필·작업을 대신한다(computeDayWithLectures).
+  const result = computeDayWithLectures({
+    blocks,
+    lectures: todayLectures(now, dayBoundaryHour),
+    settings,
+    weekday,
+    wakeMinutes,
+    sleepMinutes,
+  });
+  return { result, wakeMinutes };
 }
 
 // ---------------------------------------------------------------
@@ -1876,6 +1891,25 @@ function renderSettings() {
     })
   );
 
+  // 학기 중에만 다른 시각. 점심 13:00이 13:00 강의와 부딪히지만, 그렇다고
+  // 방학에도 12:00에 먹을 이유는 없어서 두 벌을 따로 둔다.
+  mealGroup.appendChild(el("h4", { textContent: "학기 중에는 다르게" }));
+  const semesterMealInputs = [];
+  Object.entries(MEAL_SLOTS).forEach(([id, label]) => {
+    const time = el("input", { type: "time", value: (s.semesterMeals || {})[id] || "" });
+    const row = el("div", { className: "field-row field-row--meal" });
+    row.appendChild(el("label", { textContent: `${label} 시각` }));
+    row.appendChild(time);
+    mealGroup.appendChild(row);
+    semesterMealInputs.push({ id, time });
+  });
+  mealGroup.appendChild(
+    el("p", {
+      className: "sheet-note",
+      textContent: "비워두면 위 시각을 그대로 씁니다. 위의 학기 기간 안에 있는 날에만 적용됩니다.",
+    })
+  );
+
   // --- 식단 후보 ---
   const poolGroup = el("div", { className: "settings-group" });
   poolGroup.appendChild(el("h3", { textContent: "식단 후보" }));
@@ -1991,6 +2025,10 @@ function renderSettings() {
         delete block.fixedAt;
       }
     });
+
+    // 학기 중 식사 시각은 블록을 고치지 않고 따로 얹는다 — 방학이 되면 그냥
+    // 안 쓰면 되고, 원래 시각을 되찾으려고 다시 입력할 필요가 없다.
+    s.semesterMeals = Object.fromEntries(semesterMealInputs.map(({ id, time }) => [id, time.value || ""]));
 
     saveStore(true);
     closeSheet();

@@ -87,7 +87,13 @@ export function migrate(parsed) {
   const p = parsed && typeof parsed === "object" ? parsed : {};
   return {
     version: 1,
-    settings: { ...base.settings, ...(p.settings || {}) },
+    settings: {
+      ...base.settings,
+      ...(p.settings || {}),
+      // 통째로 얕은 병합만 하면 예전 저장본(이 필드가 없던 시절)에서 undefined가
+      // 그대로 들어온다. 세 끼가 반드시 있어야 화면 쪽이 방어하지 않아도 된다.
+      semesterMeals: { ...base.settings.semesterMeals, ...(p.settings?.semesterMeals || {}) },
+    },
     blocks: Array.isArray(p.blocks) && p.blocks.length ? p.blocks : base.blocks,
     presets: p.presets && typeof p.presets === "object" ? p.presets : {},
     today: p.today && typeof p.today === "object" ? { ...emptySleep(), ...p.today } : base.today,
