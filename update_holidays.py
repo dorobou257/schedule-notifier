@@ -33,6 +33,9 @@ HEADERS = {
     "Content-Type": "application/json",
 }
 
+# 상대가 응답하지 않으면 GitHub Actions 한도까지 잡이 매달린다(notify.py와 같은 값).
+HTTP_TIMEOUT = 15
+
 
 def fetch_holidays(year: int) -> list:
     """해당 연도의 공휴일 목록을 [(YYYY-MM-DD, 이름), ...] 형태로 반환."""
@@ -55,7 +58,7 @@ def date_already_exists(date_str: str) -> bool:
             ]
         }
     }
-    resp = requests.post(url, headers=HEADERS, json=payload)
+    resp = requests.post(url, headers=HEADERS, json=payload, timeout=HTTP_TIMEOUT)
     resp.raise_for_status()
     return len(resp.json().get("results", [])) > 0
 
@@ -71,7 +74,7 @@ def create_holiday_page(date_str: str, name: str) -> None:
             "공휴일": {"checkbox": True},
         },
     }
-    resp = requests.post(url, headers=HEADERS, json=payload)
+    resp = requests.post(url, headers=HEADERS, json=payload, timeout=HTTP_TIMEOUT)
     resp.raise_for_status()
 
 

@@ -284,9 +284,17 @@ function setStatus(text) {
 // 날짜를 반드시 앱이 정해서 넘긴다. 이 앱의 하루는 dayBoundaryHour(기본 04:00)
 // 기준이라 새벽 0~4시엔 아직 "어제"인데, 워커에게 맡기면 달력 날짜를 쓰기 때문에
 // 루틴은 어제 것인데 할일·소설만 오늘 것이 뜨는 어긋남이 생긴다.
+// 워커가 응답 없이 매달리면 today.json 폴백조차 못 하고 화면이 "불러오는 중…"에
+// 멈춘다. 모든 바깥 호출에 상한을 둔다.
+const FETCH_TIMEOUT_MS = 8000;
+const PATCH_TIMEOUT_MS = 5000;
+
 async function fetchFromWorker(dateKey) {
   if (!WORKER_URL) return null;
-  const res = await fetch(`${WORKER_URL.replace(/\/$/, "")}/today?date=${dateKey}`, { cache: "no-store" });
+  const res = await fetch(`${WORKER_URL.replace(/\/$/, "")}/today?date=${dateKey}`, {
+    cache: "no-store",
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+  });
   if (!res.ok) throw new Error("worker " + res.status);
   return res.json();
 }
@@ -295,6 +303,10 @@ async function loadTodayJson(isRefresh) {
   const btn = document.getElementById("refresh-btn");
   if (isRefresh && btn) btn.classList.add("spin");
   const dateKey = logicalDateKey(new Date(), store.settings.dayBoundaryHour);
+  // 밀린 체크를 조회보다 **먼저** 보낸다. 순서가 반대면 오프라인에서 체크해둔 항목이
+  // 노션에 반영되기 전 상태의 데이터에 덮여, 다시 열었을 때 체크가 풀린 것처럼 보인다
+  // (게다가 flush는 성공했으므로 큐에도 남지 않아 영영 사라진다).
+  await flushPendingChecks();
   try {
     let data = null;
     try {
@@ -303,7 +315,10 @@ async function loadTodayJson(isRefresh) {
       data = null; // 워커가 죽었거나 오프라인 — 아래 today.json으로 내려간다
     }
     if (!data) {
-      const res = await fetch("./today.json?t=" + Date.now(), { cache: "no-store" });
+      const res = await fetch("./today.json?t=" + Date.now(), {
+        cache: "no-store",
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      });
       data = await res.json();
     }
     state.todayData = data;
@@ -314,7 +329,6 @@ async function loadTodayJson(isRefresh) {
   } finally {
     if (btn) setTimeout(() => btn.classList.remove("spin"), 600);
   }
-  flushPendingChecks();
   renderShell();
 }
 
@@ -354,6 +368,7 @@ async function patchNotion(id, done) {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ id, done }),
+    signal: AbortSignal.timeout(PATCH_TIMEOUT_MS),
   });
   if (!res.ok) throw new Error("patch " + res.status);
 }
@@ -395,6 +410,7 @@ async function setItemDone(item, done) {
 function renderShell() {
   const now = new Date();
   rolloverIfStale(now);
+  lastRenderedDateKey = logicalDateKey(now, store.settings.dayBoundaryHour);
 
   const { result, wakeMinutes } = computeForToday(now);
   state.computed = result;
@@ -669,7 +685,7 @@ function renderNowCard(now) {
     className: "now-card__time mono",
     textContent: `${boundaryMinutesToHHMM(b.start, dayBoundaryHour)} → ${boundaryMinutesToHHMM(b.end, dayBoundaryHour)}`,
   });
-  const remainEl = el("span", { className: "now-card__remain", textContent: `${b.end - nowMinutes}분 남음` });
+  const remainEl = el("span", { className: "now-card__remain", textContent: `${formatDuration(b.end - nowMinutes)} 남음` });
   meta.appendChild(timeEl);
   meta.appendChild(remainEl);
   wrap.appendChild(meta);
@@ -924,6 +940,18 @@ function openNovelAssignSheet(item) {
 // ---------------------------------------------------------------
 
 let tickTimer = null;
+// 마지막으로 화면을 그린 논리적 날짜. 앱을 켜둔 채 경계 시각(기본 04:00)을 넘기면
+// 하루가 바뀌었는데도 어제 화면이 그대로 남아 있었다 — 틱이 renderMain만 부르고
+// rolloverIfStale도 데이터 재조회도 하지 않았기 때문이다.
+let lastRenderedDateKey = null;
+
+/** 논리적 날짜가 바뀌었으면 하루치를 통째로 새로 불러온다. @returns 갱신했는지 */
+function reloadIfDayChanged() {
+  const key = logicalDateKey(new Date(), store.settings.dayBoundaryHour);
+  if (lastRenderedDateKey === key) return false;
+  loadTodayJson(false); // 안에서 rolloverIfStale → renderShell까지 이어진다
+  return true;
+}
 
 function updateNowCard() {
   // 드래그로 순서를 바꾸는 중이라면 화면을 갈아끼우면 안 된다 — 잡고 있던
@@ -942,7 +970,7 @@ function updateNowCard() {
     renderMain(now); // 블록이 바뀌었다 — 이번만 다시 그린다.
     return;
   }
-  state.nowCardEls.remainEl.textContent = `${b.end - nowMinutes}분 남음`;
+  state.nowCardEls.remainEl.textContent = `${formatDuration(b.end - nowMinutes)} 남음`;
   const pct = Math.max(0, Math.min(100, ((nowMinutes - b.start) / (b.end - b.start)) * 100));
   state.nowCardEls.fillEl.style.width = pct + "%";
 }
@@ -953,7 +981,7 @@ function scheduleTick() {
   const now = new Date();
   const msToNextMinute = 60000 - (now.getSeconds() * 1000 + now.getMilliseconds());
   tickTimer = setTimeout(() => {
-    updateNowCard();
+    if (!reloadIfDayChanged()) updateNowCard();
     scheduleTick();
   }, msToNextMinute);
 }
@@ -962,7 +990,8 @@ document.addEventListener("visibilitychange", () => {
   if (document.hidden) {
     clearTimeout(tickTimer);
   } else {
-    updateNowCard();
+    // 탭을 접어둔 사이 날짜가 넘어갔을 수 있다(밤에 닫고 아침에 여는 게 보통이다).
+    if (!reloadIfDayChanged()) updateNowCard();
     scheduleTick();
   }
 });
@@ -1048,6 +1077,9 @@ function openBedTimeSheet() {
 function closeSheet() {
   const root = document.getElementById("sheet-root");
   root.innerHTML = "";
+  // 제안 시트를 닫았다는 건 "오늘은 됐다"는 뜻이다. 이걸 남기지 않으면 적용하지
+  // 않고 바깥을 탭해 닫을 때마다 다음 renderShell에서 같은 시트가 다시 올라온다.
+  if (state.activeSheet === "proposal") state.proposalDismissed = true;
   state.activeSheet = null;
 }
 
@@ -1156,13 +1188,12 @@ function openProposalSheet() {
     });
 
     const wakeMinutes = getWakeMinutes(store.settings.dayBoundaryHour, new Date());
-    const { sheet } = openSheet(
+    openSheet(
       `${boundaryMinutesToHHMM(wakeMinutes, store.settings.dayBoundaryHour)} 기상`,
       "오늘 일정을 이렇게 조정할까요? 항목을 체크 해제하면 그 블록은 그대로 유지됩니다.",
       [...rows, summary],
       [editBtn, applyBtn]
     );
-    sheet.querySelector(".sheet-overlay")?.addEventListener("click", () => {});
   }
 }
 

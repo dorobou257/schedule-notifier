@@ -42,6 +42,9 @@ HEADERS = {
 NTFY_API = "https://ntfy.sh/"
 APP_URL = "https://dorobou257.github.io/schedule-notifier/"
 
+# 상대가 응답하지 않으면 GitHub Actions 한도(6시간)까지 잡이 매달린다. 항상 상한을 둔다.
+HTTP_TIMEOUT = 15
+
 KST = timezone(timedelta(hours=9))
 TODAY_JSON_PATH = Path(__file__).parent / "docs" / "today.json"
 
@@ -80,7 +83,7 @@ def query_database(database_id: str, date_str: str) -> list:
     }
     results = []
     while True:
-        resp = requests.post(url, headers=HEADERS, json=payload)
+        resp = requests.post(url, headers=HEADERS, json=payload, timeout=HTTP_TIMEOUT)
         resp.raise_for_status()
         data = resp.json()
         results.extend(data.get("results", []))
@@ -224,6 +227,7 @@ def send_push(title: str, message: str) -> None:
             "message": message,
             "click": APP_URL,
         },
+        timeout=HTTP_TIMEOUT,
     )
     resp.raise_for_status()
 

@@ -5,6 +5,13 @@ permissions:
   pages: write    # GitHub Pages에 직접 배포하기 위해 필요
   id-token: write # GitHub Pages 배포 인증에 필요
 
+# deploy-pages.yml과 같은 그룹으로 묶어 동시 배포를 막는다. 아래 푸시가
+# docs/를 건드리므로 사람이 같은 시각에 화면을 고쳐 푸시하면 두 배포가
+# 겹칠 수 있었다. 진행 중인 배포를 취소하지는 않는다(절반만 올라간다).
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
 on:
   # GitHub 자체 schedule 트리거는 지연/누락이 잦아, 외부 크론 서비스
   # (cron-job.org)가 매일 아침 8시(KST) 1회 이 workflow_dispatch를 직접
@@ -36,7 +43,12 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add docs/today.json
           git diff --cached --quiet && echo "변경 없음, 커밋 생략" || git commit -m "오늘의 일정 갱신: $(date -u +%F)"
-          git push
+          # 사람이 같은 순간에 푸시했을 수 있다 — 한 번은 따라잡고 다시 시도한다.
+          git push || (git pull --rebase && git push)
+      # 이 배포 스텝은 없앨 수 없다. 위 푸시는 기본 GITHUB_TOKEN으로 나가는데,
+      # GitHub은 재귀를 막으려고 GITHUB_TOKEN이 만든 푸시로는 다른 워크플로를
+      # 트리거하지 않는다 — 즉 deploy-pages.yml이 이어받지 못한다.
+      # 대신 위쪽 concurrency로 deploy-pages와 겹치지 않게만 묶어 둔다.
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
