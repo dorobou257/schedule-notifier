@@ -40,7 +40,35 @@ export function defaultStore() {
     // excluded = 어디에도 배정하지 않기로 한 항목 키들. 둘 다 해당 없는 항목은
     // 남은 집필 블록에 순서대로 자동 배정된다. 날짜가 바뀌면 통째로 비운다.
     novelAssign: { date: null, map: {}, excluded: [] },
+    // 끼니별로 등록해 둔 메뉴 후보. 오래 남는다(하루짜리가 아니다).
+    mealPool: { breakfast: [], lunch: [], dinner: [] },
+    // 오늘의 식단. byBlockId[식사 블록 id] = "김치찌개". 날짜가 바뀌면 비운다.
+    meals: { date: null, byBlockId: {} },
+    // 최근에 뭘 먹었는지. 같은 메뉴가 연달아 나오지 않게 하는 데만 쓰므로
+    // 오래 들고 있을 이유가 없다(MEAL_HISTORY_DAYS일치만 남긴다).
+    mealHistory: [],
   };
+}
+
+/** 식사 기록을 며칠치까지 들고 있을지. */
+export const MEAL_HISTORY_DAYS = 14;
+
+/** 오늘 먹은 걸 기록에 남기고 오래된 건 버린다. 같은 날 같은 블록은 덮어쓴다. */
+export function rememberMeal(dateKey, blockId, text) {
+  const kept = (store.mealHistory || []).filter((m) => !(m.date === dateKey && m.blockId === blockId));
+  if (text) kept.push({ date: dateKey, blockId, text });
+  const cutoff = shiftDateKey(dateKey, -MEAL_HISTORY_DAYS);
+  store.mealHistory = kept.filter((m) => m.date > cutoff);
+  // 사용자가 "이걸 먹는다"고 확정한 순간이라 즉시 쓴다. 디바운스로 미뤄두면
+  // 곧바로 앱을 닫았을 때 기록만 빠진 채 저장된다.
+  saveStore(true);
+}
+
+/** "YYYY-MM-DD"에서 days만큼 옮긴 같은 형식의 날짜 키. */
+export function shiftDateKey(dateKey, days) {
+  const [y, m, d] = dateKey.split("-").map(Number);
+  const dt = new Date(y, m - 1, d + days);
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
 }
 
 /**
@@ -74,7 +102,24 @@ export function migrate(parsed) {
             excluded: Array.isArray(p.novelAssign.excluded) ? p.novelAssign.excluded : [],
           }
         : base.novelAssign,
+    mealPool: {
+      breakfast: strings(p.mealPool?.breakfast),
+      lunch: strings(p.mealPool?.lunch),
+      dinner: strings(p.mealPool?.dinner),
+    },
+    meals:
+      p.meals && typeof p.meals.byBlockId === "object"
+        ? { date: p.meals.date || null, byBlockId: p.meals.byBlockId }
+        : base.meals,
+    mealHistory: Array.isArray(p.mealHistory)
+      ? p.mealHistory.filter((m) => m && typeof m.date === "string" && typeof m.text === "string")
+      : [],
   };
+}
+
+/** 문자열만 남긴 배열. 손으로 고친 백업 파일이 들어와도 화면이 깨지지 않게 한다. */
+function strings(v) {
+  return Array.isArray(v) ? v.filter((s) => typeof s === "string" && s.trim()) : [];
 }
 
 export function loadStore() {
@@ -146,6 +191,12 @@ export function rolloverIfStale(now) {
   // 집필↔작업 교체도, 시각 고정 해제도 오늘 하루짜리 — 내일은 원래 루틴이다.
   if (store.dayTweaks.date !== todayKey) {
     store.dayTweaks = { date: todayKey, categories: {}, showRoutine: false, unpinned: [] };
+    saveStore(true);
+  }
+  // 어제 먹은 걸 오늘 화면에 띄워둘 이유는 없다. 다만 기록으로는 남겨둔다 —
+  // 같은 메뉴를 연달아 추천하지 않는 데 쓴다.
+  if (store.meals.date !== todayKey) {
+    store.meals = { date: todayKey, byBlockId: {} };
     saveStore(true);
   }
   return sleepReset;

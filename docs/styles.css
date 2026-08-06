@@ -181,8 +181,10 @@ li.agenda__row.dragging{
   transition:box-shadow 150ms ease, background 150ms ease;
 }
 .agenda__body{ display:flex; flex-direction:column; gap:2px; min-width:0; flex:1; }
-/* 이 집필 블록에 배정된 소설 일정 — 블록 이름 아래 한 줄로 붙는다. */
+/* 이 집필 블록에 배정된 소설 일정 / 식사 블록의 오늘 식단 — 이름 아래 한 줄. */
 .agenda__novel{ font-size:12px; color:var(--muted); word-break:keep-all; }
+.agenda__novel.is-empty{ color:var(--faint); }
+li.agenda__row[data-meal="1"]{ cursor:pointer; }
 li.agenda__row.is-current .agenda__novel{ font-weight:400; }
 .agenda__grip{ margin-left:auto; flex:none; color:var(--faint); display:flex; align-items:center; }
 .agenda__hint{ margin:8px 12px 4px; font-size:12px; color:var(--faint); line-height:1.5; }
@@ -395,4 +397,15 @@ li.block-item.dragging{
 .settings-group h3{ margin:0 0 4px; font-size:12.5px; font-weight:800; color:var(--faint); text-transform:uppercase; letter-spacing:.06em; }
 .preset-list{ display:flex; flex-wrap:wrap; gap:8px; }
 .preset-chip{ padding:8px 14px; border-radius:99px; border:1px solid var(--rule); background:var(--surface); font-size:13px; font-weight:700; cursor:pointer; }
+/* 최근에 먹은 메뉴 — 고를 수는 있되 눈에 덜 띄게 */
+.preset-chip.is-recent{ color:var(--faint); border-style:dashed; font-weight:600; }
+/* 식사 시각 고정: 라벨 / 체크 / 시각을 한 줄에 */
+.field-row--meal{ flex-direction:row; align-items:center; gap:10px; }
+.field-row--meal label{ flex:1; }
+.field-row--meal input[type="checkbox"]{ width:19px; height:19px; accent-color:var(--accent); flex:none; }
+.field-row--meal input[type="time"]{ flex:none; width:auto; }
+.field-row--meal input[type="time"]:disabled{ opacity:.45; }
+/* 끼니별 식단 후보 묶음 */
+.pool-row{ display:flex; flex-direction:column; gap:6px; margin-bottom:10px; }
+.pool-row h4{ margin:0; font-size:12.5px; font-weight:700; color:var(--muted); }
 .preset-chip.is-active{ background:var(--accent-soft); border-color:var(--accent); color:var(--accent-ink); }

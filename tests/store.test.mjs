@@ -7,7 +7,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { store, setStore, defaultStore, migrate, rolloverIfStale, emptySleep, nextDateKey } from "../docs/store.js";
+import {
+  store, setStore, defaultStore, migrate, rolloverIfStale, emptySleep, nextDateKey,
+  rememberMeal, shiftDateKey, MEAL_HISTORY_DAYS,
+} from "../docs/store.js";
 import { logicalDateKey } from "../docs/routine.js";
 
 /** 로컬 시각으로 Date를 만든다(logicalDateKey가 로컬 시각 기준이라 맞춰준다). */
@@ -179,4 +182,82 @@ test("롤오버: 오늘만 푼 시각 고정도 다음날이면 원래대로 돌
 
   rolloverIfStale(at(2026, 8, 7, 9, 0));
   assert.deepEqual(store.dayTweaks.unpinned, [], "내일은 강의도 점심도 제 시각으로");
+});
+
+// --- 식단 -------------------------------------------------------------------
+
+test("shiftDateKey: 앞뒤로 옮기고 월·연 경계를 넘는다", () => {
+  assert.equal(shiftDateKey("2026-08-06", 1), "2026-08-07");
+  assert.equal(shiftDateKey("2026-08-06", -3), "2026-08-03");
+  assert.equal(shiftDateKey("2026-09-01", -1), "2026-08-31");
+  assert.equal(shiftDateKey("2027-01-01", -1), "2026-12-31");
+});
+
+test("migrate: 식단 필드가 없는 옛 저장본도 안전하게 채운다", () => {
+  const s = migrate({});
+  assert.deepEqual(s.mealPool, { breakfast: [], lunch: [], dinner: [] });
+  assert.deepEqual(s.meals, { date: null, byBlockId: {} });
+  assert.deepEqual(s.mealHistory, []);
+});
+
+test("migrate: 후보 목록에서 문자열이 아닌 것과 빈 값을 걸러낸다", () => {
+  const s = migrate({ mealPool: { lunch: ["김치찌개", "", "  ", 42, null, "된장찌개"], dinner: "배열아님" } });
+  assert.deepEqual(s.mealPool.lunch, ["김치찌개", "된장찌개"]);
+  assert.deepEqual(s.mealPool.dinner, []);
+  assert.deepEqual(s.mealPool.breakfast, []);
+});
+
+test("migrate: 망가진 식사 기록 항목은 버린다", () => {
+  const s = migrate({
+    mealHistory: [
+      { date: "2026-08-05", blockId: "lunch", text: "김치찌개" },
+      { date: 20260805, blockId: "lunch", text: "숫자날짜" },
+      { date: "2026-08-04", blockId: "lunch" },
+      null,
+    ],
+  });
+  assert.deepEqual(s.mealHistory.map((m) => m.text), ["김치찌개"]);
+});
+
+test("롤오버: 오늘의 식단은 날짜가 바뀌면 비우되 기록은 남긴다", () => {
+  const s = freshStore();
+  rolloverIfStale(at(2026, 8, 6, 9, 0));
+  s.meals.byBlockId.lunch = "김치찌개";
+  rememberMeal("2026-08-06", "lunch", "김치찌개");
+
+  rolloverIfStale(at(2026, 8, 6, 22, 0));
+  assert.equal(store.meals.byBlockId.lunch, "김치찌개", "같은 날엔 그대로");
+
+  rolloverIfStale(at(2026, 8, 7, 9, 0));
+  assert.deepEqual(store.meals, { date: "2026-08-07", byBlockId: {} }, "다음날 화면은 비운다");
+  assert.deepEqual(
+    store.mealHistory.map((m) => m.text),
+    ["김치찌개"],
+    "무엇을 먹었는지는 남아야 중복 추천을 피할 수 있다"
+  );
+});
+
+test("rememberMeal: 같은 날 같은 끼니는 덮어쓰고, 비우면 지운다", () => {
+  freshStore();
+  rememberMeal("2026-08-06", "lunch", "김치찌개");
+  rememberMeal("2026-08-06", "lunch", "된장찌개");
+  assert.deepEqual(store.mealHistory.map((m) => m.text), ["된장찌개"]);
+
+  rememberMeal("2026-08-06", "dinner", "제육볶음");
+  assert.equal(store.mealHistory.length, 2, "다른 끼니는 따로 쌓인다");
+
+  rememberMeal("2026-08-06", "lunch", "");
+  assert.deepEqual(store.mealHistory.map((m) => m.text), ["제육볶음"], "비우면 기록도 지운다");
+});
+
+test("rememberMeal: 오래된 기록은 알아서 버린다", () => {
+  freshStore();
+  const today = "2026-08-20";
+  rememberMeal(shiftDateKey(today, -(MEAL_HISTORY_DAYS + 5)), "lunch", "아주 옛날");
+  rememberMeal(shiftDateKey(today, -(MEAL_HISTORY_DAYS - 1)), "dinner", "아슬아슬");
+  rememberMeal(today, "breakfast", "오늘");
+
+  const texts = store.mealHistory.map((m) => m.text);
+  assert.equal(texts.includes("아주 옛날"), false, `${MEAL_HISTORY_DAYS}일보다 오래된 건 버린다`);
+  assert.deepEqual(texts, ["아슬아슬", "오늘"]);
 });

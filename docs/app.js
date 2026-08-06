@@ -18,6 +18,8 @@ import {
   migrate,
   saveStore,
   rolloverIfStale,
+  rememberMeal,
+  shiftDateKey,
   emptySleep,
   nextDateKey,
 } from "./store.js";
@@ -113,6 +115,52 @@ function getSleepOverrideMinutes(now, dayBoundaryHour) {
   if (isSleepActive(now, dayBoundaryHour)) return null;
   if (!store.today.bedAt) return null;
   return dateToBoundaryMinutes(new Date(store.today.bedAt), dayBoundaryHour);
+}
+
+// ---------------------------------------------------------------
+// 식사 — 오늘의 식단
+//
+// 기본 루틴의 세 끼는 id가 고정이라(아침/점심/저녁) 그걸 그대로 끼니 키로 쓴다.
+// 사용자가 만든 다른 식사 블록도 식단을 적을 수 있게 하되, 후보 목록은 이
+// 세 끼에만 붙는다 — "아침 후보"가 없는 끼니에 추천을 하라고 할 수는 없다.
+// ---------------------------------------------------------------
+
+const MEAL_SLOTS = { breakfast: "아침", lunch: "점심", dinner: "저녁" };
+// 고정을 처음 켤 때 채워줄 시각. 아무 값이나 넣으면 아침을 13:00으로 잡아버린다.
+const MEAL_DEFAULT_TIME = { breakfast: "08:00", lunch: "13:00", dinner: "18:00" };
+
+/** 이 블록이 식단을 적을 수 있는 식사 블록인지. */
+function isMealBlock(b) {
+  return b.category === "식사";
+}
+
+/** 이 식사 블록이 어느 끼니인지(후보 목록을 고르는 키). 아니면 null. */
+function mealSlotOf(blockId) {
+  return MEAL_SLOTS[blockId] ? blockId : null;
+}
+
+/** 오늘 이 블록에 적어둔 식단. 없으면 빈 문자열. */
+function mealOf(blockId) {
+  return (store.meals.byBlockId || {})[blockId] || "";
+}
+
+function setMeal(blockId, text) {
+  const clean = (text || "").trim();
+  const byBlockId = { ...(store.meals.byBlockId || {}) };
+  if (clean) byBlockId[blockId] = clean;
+  else delete byBlockId[blockId];
+  store.meals = { ...store.meals, byBlockId };
+  saveStore(true);
+  rememberMeal(store.meals.date, blockId, clean);
+}
+
+/** 최근 며칠 안에 이 끼니로 먹은 메뉴들(가까운 날짜부터). */
+function recentMeals(blockId, days) {
+  const from = shiftDateKey(store.meals.date || logicalDateKey(new Date(), store.settings.dayBoundaryHour), -days);
+  return (store.mealHistory || [])
+    .filter((m) => m.blockId === blockId && m.date > from)
+    .sort((a, b) => (a.date < b.date ? 1 : -1))
+    .map((m) => m.text);
 }
 
 /** 오늘만 시각 고정을 푼 블록 id 집합. 취침(sleep)은 절대 여기 들어오지 않는다 —
@@ -609,6 +657,17 @@ function renderAgenda(now) {
     if (freed) body.appendChild(el("span", { className: "agenda__swap", textContent: "오늘만 시간 자유" }));
     const novel = state.novelAssignments.get(b.id);
     if (novel) body.appendChild(el("span", { className: "agenda__novel", textContent: novelLabel(novel) }));
+    // 식사 블록엔 오늘의 식단을 소설 배정과 같은 자리에 한 줄로 붙인다.
+    if (isMealBlock(b)) {
+      const menu = mealOf(b.id);
+      body.appendChild(
+        el("span", {
+          className: "agenda__novel" + (menu ? "" : " is-empty"),
+          textContent: menu || "식단 미정",
+        })
+      );
+      if (!reordering) li.dataset.meal = "1";
+    }
     li.appendChild(body);
     if (reordering) li.appendChild(el("span", { className: "agenda__grip", innerHTML: ICONS.grip }));
     ul.appendChild(li);
@@ -648,6 +707,11 @@ function renderAgenda(now) {
   } else {
     // 순서 편집이 아닐 때의 꾹 누르기 — 집필↔작업을 오늘만 맞바꾼다.
     enableLongPress(ul, 'li.agenda__row[data-swappable="1"]', (li) => openCategorySwapSheet(li.dataset.id));
+    // 식사 블록은 탭 한 번으로 식단을 적는다(꾹 누를 일이 아니다).
+    ul.addEventListener("click", (e) => {
+      const li = e.target.closest('li.agenda__row[data-meal="1"]');
+      if (li) openMealSheet(li.dataset.id);
+    });
   }
 
   if (!reordering && rows.length > upcomingCount) {
@@ -1393,6 +1457,67 @@ function selectField(options, current) {
   return select;
 }
 
+/** 오늘의 식단을 적는 시트. 후보에서 고르거나 직접 쓴다. */
+function openMealSheet(blockId) {
+  const b = state.computed.blocks.find((x) => x.id === blockId);
+  if (!b) return;
+  state.activeSheet = "meal";
+  const slot = mealSlotOf(blockId);
+  const pool = slot ? store.mealPool[slot] || [] : [];
+  const recent = new Set(recentMeals(blockId, 3));
+
+  const apply = (text) => {
+    setMeal(blockId, text);
+    closeSheet();
+    renderMain(new Date());
+  };
+
+  const input = el("input", { type: "text", value: mealOf(blockId), placeholder: "예: 김치찌개" });
+  const field = el("div", { className: "field-row" });
+  field.appendChild(el("label", { textContent: "오늘의 식단" }));
+  field.appendChild(input);
+
+  const body = [field];
+
+  if (pool.length) {
+    const group = el("div", { className: "settings-group" });
+    group.appendChild(el("h3", { textContent: "등록한 후보" }));
+    const chips = el("div", { className: "preset-list" });
+    pool.forEach((menu) => {
+      // 최근 3일 안에 먹은 건 흐리게 — 고를 수는 있되 눈에 덜 띄게 한다.
+      const chip = el("button", { className: "preset-chip" + (recent.has(menu) ? " is-recent" : ""), textContent: menu });
+      chip.addEventListener("click", () => apply(menu));
+      chips.appendChild(chip);
+    });
+    group.appendChild(chips);
+    if (recent.size) {
+      group.appendChild(el("p", { className: "sheet-note", textContent: "흐린 것은 최근 3일 안에 먹은 메뉴입니다." }));
+    }
+    body.push(group);
+  } else if (slot) {
+    body.push(
+      el("p", {
+        className: "sheet-note",
+        textContent: `설정 ▸ 식단 후보에서 ${MEAL_SLOTS[slot]} 메뉴를 등록해두면 여기서 바로 고를 수 있습니다.`,
+      })
+    );
+  }
+
+  const saveBtn = el("button", { className: "btn btn--primary", textContent: "저장" });
+  saveBtn.addEventListener("click", () => apply(input.value));
+  const clearBtn = el("button", { className: "btn btn--ghost", textContent: "비우기" });
+  clearBtn.addEventListener("click", () => apply(""));
+  const cancelBtn = el("button", { className: "btn btn--ghost", textContent: "취소" });
+  cancelBtn.addEventListener("click", closeSheet);
+
+  openSheet(
+    b.name,
+    `${boundaryMinutesToHHMM(b.start, store.settings.dayBoundaryHour)} · 무엇을 먹을지 적어두면 오늘 하루에 함께 보입니다.`,
+    body,
+    [clearBtn, cancelBtn, saveBtn]
+  );
+}
+
 /** 오늘 하루만 이 블록의 성격을 집필↔작업으로 맞바꾸는 시트. 루틴 자체는 그대로 둔다. */
 function openCategorySwapSheet(blockId) {
   const b = state.computed.blocks.find((x) => x.id === blockId);
@@ -1496,6 +1621,72 @@ function renderSettings() {
   dropRow.classList.add("inline");
   basics.appendChild(dropRow);
 
+  // --- 식사 시간 ---
+  // 지금까진 점심만 13:00으로 박혀 있었다. 복학하면 강의에 맞춰 세 끼가 전부
+  // 움직여야 하므로, 블록 편집을 열지 않고 여기서 바로 고칠 수 있게 한다.
+  const mealGroup = el("div", { className: "settings-group" });
+  mealGroup.appendChild(el("h3", { textContent: "식사 시간" }));
+  const mealTimeInputs = [];
+  Object.entries(MEAL_SLOTS).forEach(([id, label]) => {
+    const block = store.blocks.find((b) => b.id === id);
+    if (!block) return;
+    const pinned = block.anchor === "clock";
+    const pin = el("input", { type: "checkbox", checked: pinned });
+    const time = el("input", {
+      type: "time",
+      value:
+        block.fixedAt != null
+          ? boundaryMinutesToHHMM(block.fixedAt, s.dayBoundaryHour)
+          : MEAL_DEFAULT_TIME[id],
+      disabled: !pinned,
+    });
+    pin.addEventListener("change", () => {
+      time.disabled = !pin.checked;
+    });
+    const row = el("div", { className: "field-row field-row--meal" });
+    row.appendChild(el("label", { textContent: `${label} 시각 고정` }));
+    row.appendChild(pin);
+    row.appendChild(time);
+    mealGroup.appendChild(row);
+    mealTimeInputs.push({ id, pin, time });
+  });
+  mealGroup.appendChild(
+    el("p", {
+      className: "sheet-note",
+      textContent: "고정을 끄면 앞뒤 블록에 맞춰 흘러갑니다. 오늘 하루만 옮기려면 '오늘 하루'에서 블록을 끌어보세요.",
+    })
+  );
+
+  // --- 식단 후보 ---
+  const poolGroup = el("div", { className: "settings-group" });
+  poolGroup.appendChild(el("h3", { textContent: "식단 후보" }));
+  Object.entries(MEAL_SLOTS).forEach(([slot, label]) => {
+    const wrap = el("div", { className: "pool-row" });
+    wrap.appendChild(el("h4", { textContent: label }));
+    const chips = el("div", { className: "preset-list" });
+    (store.mealPool[slot] || []).forEach((menu) => {
+      const chip = el("button", { className: "preset-chip", textContent: menu + "  ×" });
+      chip.addEventListener("click", () => {
+        store.mealPool[slot] = store.mealPool[slot].filter((m) => m !== menu);
+        saveStore(true);
+        renderSettings();
+      });
+      chips.appendChild(chip);
+    });
+    const addBtn = el("button", { className: "preset-chip", textContent: "+ 추가" });
+    addBtn.addEventListener("click", () => {
+      const name = prompt(`${label} 후보에 추가할 메뉴`);
+      const clean = (name || "").trim();
+      if (!clean || store.mealPool[slot].includes(clean)) return;
+      store.mealPool[slot] = [...store.mealPool[slot], clean];
+      saveStore(true);
+      renderSettings();
+    });
+    chips.appendChild(addBtn);
+    wrap.appendChild(chips);
+    poolGroup.appendChild(wrap);
+  });
+
   const priorityGroup = el("div", { className: "settings-group" });
   priorityGroup.appendChild(el("h3", { textContent: "축소 우선순위 (위에서부터 먼저 줄어듭니다)" }));
   const priorityList = el("ul", { className: "priority-list" });
@@ -1562,6 +1753,20 @@ function renderSettings() {
     s.sleepTargetMinutes = Math.round(Number(sleepTargetInput.value) * 60) || s.sleepTargetMinutes;
     s.dropBreakfastWhenLate = dropBreakfastInput.checked;
     s.reducePriority = order;
+
+    // 식사 시각 고정은 블록 자체를 고치는 일이라 설정 저장과 함께 반영한다.
+    mealTimeInputs.forEach(({ id, pin, time }) => {
+      const block = store.blocks.find((b) => b.id === id);
+      if (!block) return;
+      if (pin.checked && time.value) {
+        block.anchor = "clock";
+        block.fixedAt = hhmmToBoundaryMinutes(time.value, s.dayBoundaryHour);
+      } else {
+        delete block.anchor;
+        delete block.fixedAt;
+      }
+    });
+
     saveStore(true);
     closeSheet();
     renderShell();
@@ -1569,7 +1774,7 @@ function renderSettings() {
   const cancelBtn = el("button", { className: "btn btn--ghost", textContent: "닫기" });
   cancelBtn.addEventListener("click", closeSheet);
 
-  openSheet("설정", null, [editRoutineBtn, basics, priorityGroup, dataGroup], [cancelBtn, saveBtn]);
+  openSheet("설정", null, [editRoutineBtn, basics, mealGroup, poolGroup, priorityGroup, dataGroup], [cancelBtn, saveBtn]);
 }
 
 function exportData() {
