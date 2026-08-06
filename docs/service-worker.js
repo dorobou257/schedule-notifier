@@ -1,4 +1,4 @@
-const SHELL_CACHE = "schedule-shell-v10";
+const SHELL_CACHE = "schedule-shell-v11";
 const SHELL_FILES = [
   "./",
   "./index.html",
@@ -9,6 +9,7 @@ const SHELL_FILES = [
   "./lectures.js",
   "./drag.js",
   "./week.js",
+  "./meal-suggest.js",
   "./app.js",
   "./config.js",
   "./manifest.json",

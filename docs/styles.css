@@ -258,6 +258,12 @@ li.row.is-checked{ opacity:.5; transition:opacity 200ms ease; }
 li.row.is-checked .text{ text-decoration:line-through; }
 @media (prefers-reduced-motion: reduce){ li.row.is-checked{ transition:none; } }
 
+/* 식단 추천 — 후보를 오래 안 먹은 순으로 하나씩 권한다 */
+.meal-suggest{ display:flex; gap:8px; }
+.meal-suggest .btn{ flex:1; }
+.meal-suggest__text:empty{ display:none; }
+.meal-suggest__text{ margin-top:-2px; color:var(--accent-ink); font-weight:600; }
+
 /* ---------- 이번 주 화면 ---------- */
 .week{ display:flex; flex-direction:column; gap:12px; }
 .card-head .spacer{ flex:1; }

@@ -32,6 +32,7 @@ import {
 } from "./novel-assign.js";
 import { enableDragReorder, enableLongPress, isDragging } from "./drag.js";
 import { openWeek, renderWeekView, weekRangeLabel } from "./week.js";
+import { rankMeals, reasonFor, AVOID_DAYS } from "./meal-suggest.js";
 import {
   DAY_NAMES,
   LECTURE_CATEGORY,
@@ -1603,7 +1604,7 @@ function openMealSheet(blockId) {
   state.activeSheet = "meal";
   const slot = mealSlotOf(blockId);
   const pool = slot ? store.mealPool[slot] || [] : [];
-  const recent = new Set(recentMeals(blockId, 3));
+  const recent = new Set(recentMeals(blockId, AVOID_DAYS));
 
   const apply = (text) => {
     setMeal(blockId, text);
@@ -1618,6 +1619,40 @@ function openMealSheet(blockId) {
 
   const body = [field];
 
+  // 오래 안 먹은 순으로 줄 세워 하나씩 권한다. 마음에 안 들면 다시 눌러 다음
+  // 것으로 넘어간다 — 무작위가 아니라 순서대로라 같은 것이 다시 나오지 않는다.
+  if (pool.length) {
+    const dateKey = store.meals.date || logicalDateKey(new Date(), store.settings.dayBoundaryHour);
+    // 오늘 다른 끼니에 이미 정한 메뉴는 뒤로 미룬다.
+    const exclude = Object.entries(store.meals.byBlockId || {})
+      .filter(([id]) => id !== blockId)
+      .map(([, text]) => text);
+    const ranked = rankMeals({ pool, history: store.mealHistory, blockId, exclude });
+
+    let cursor = 0;
+    const suggestion = el("p", { className: "sheet-note meal-suggest__text" });
+    const suggestBtn = el("button", { className: "btn btn--ghost", textContent: "추천받기" });
+    const useBtn = el("button", { className: "btn btn--ghost", textContent: "이걸로" });
+    useBtn.style.display = "none";
+
+    const show = () => {
+      const menu = ranked[cursor % ranked.length];
+      suggestion.textContent = `${menu} — ${reasonFor(menu, { history: store.mealHistory, blockId, dateKey })}`;
+      useBtn.style.display = "";
+      useBtn.textContent = `“${menu}” 담기`;
+      useBtn.onclick = () => {
+        input.value = menu;
+        input.focus();
+      };
+      suggestBtn.textContent = ranked.length > 1 ? "다른 것" : "추천받기";
+      cursor += 1;
+    };
+    suggestBtn.addEventListener("click", show);
+
+    const suggestRow = el("div", { className: "meal-suggest" }, [suggestBtn, useBtn]);
+    body.push(suggestRow, suggestion);
+  }
+
   if (pool.length) {
     const group = el("div", { className: "settings-group" });
     group.appendChild(el("h3", { textContent: "등록한 후보" }));
@@ -1630,7 +1665,9 @@ function openMealSheet(blockId) {
     });
     group.appendChild(chips);
     if (recent.size) {
-      group.appendChild(el("p", { className: "sheet-note", textContent: "흐린 것은 최근 3일 안에 먹은 메뉴입니다." }));
+      group.appendChild(
+        el("p", { className: "sheet-note", textContent: `흐린 것은 최근 ${AVOID_DAYS}일 안에 먹은 메뉴입니다.` })
+      );
     }
     body.push(group);
   } else if (slot) {
