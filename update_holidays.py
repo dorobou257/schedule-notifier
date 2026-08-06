@@ -15,7 +15,8 @@ import os
 from datetime import datetime, timezone, timedelta
 
 import holidays
-import requests
+
+from notion_http import post_with_retry
 
 # notify.py도 같은 상수를 쓰지만, 이 스크립트는 GitHub Actions Secrets로
 # NOTION_TOKEN/SCHEDULE_DB_ID만 받고 NOVEL_DB_ID/NTFY_TOPIC은 없으므로
@@ -32,9 +33,6 @@ HEADERS = {
     "Notion-Version": "2022-06-28",
     "Content-Type": "application/json",
 }
-
-# 상대가 응답하지 않으면 GitHub Actions 한도까지 잡이 매달린다(notify.py와 같은 값).
-HTTP_TIMEOUT = 15
 
 
 def fetch_holidays(year: int) -> list:
@@ -66,8 +64,7 @@ def existing_holiday_dates(year: int) -> set:
     }
     dates = set()
     while True:
-        resp = requests.post(url, headers=HEADERS, json=payload, timeout=HTTP_TIMEOUT)
-        resp.raise_for_status()
+        resp = post_with_retry(url, headers=HEADERS, json=payload, label="노션 조회")
         data = resp.json()
         for p in data.get("results", []):
             start = ((p.get("properties", {}).get("날짜") or {}).get("date") or {}).get("start") or ""
@@ -89,8 +86,18 @@ def create_holiday_page(date_str: str, name: str) -> None:
             "공휴일": {"checkbox": True},
         },
     }
-    resp = requests.post(url, headers=HEADERS, json=payload, timeout=HTTP_TIMEOUT)
-    resp.raise_for_status()
+    # 페이지를 "만드는" 요청이라 조회와 다르게 다룬다. 타임아웃은 안 만들어진
+    # 것이 아니라 만들어졌는지 모르는 것이어서, 다시 보내면 같은 공휴일이 두 개
+    # 생길 수 있다. 속도 제한(429)은 노션이 분명하게 거절한 것이므로 그때만
+    # 다시 보낸다 — 공휴일이 15~20개씩 연달아 들어가니 실제로 걸릴 수 있다.
+    post_with_retry(
+        url,
+        headers=HEADERS,
+        json=payload,
+        retry_statuses=(429,),
+        retry_on_network_error=False,
+        label="공휴일 등록",
+    )
 
 
 def main():

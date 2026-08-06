@@ -25,7 +25,7 @@ import os
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-import requests
+from notion_http import post_with_retry
 
 NOTION_TOKEN = os.environ["NOTION_TOKEN"]
 SCHEDULE_DB_ID = os.environ["SCHEDULE_DB_ID"]
@@ -41,9 +41,6 @@ HEADERS = {
 
 NTFY_API = "https://ntfy.sh/"
 APP_URL = "https://dorobou257.github.io/schedule-notifier/"
-
-# 상대가 응답하지 않으면 GitHub Actions 한도(6시간)까지 잡이 매달린다. 항상 상한을 둔다.
-HTTP_TIMEOUT = 15
 
 KST = timezone(timedelta(hours=9))
 TODAY_JSON_PATH = Path(__file__).parent / "docs" / "today.json"
@@ -83,8 +80,8 @@ def query_database(database_id: str, date_str: str) -> list:
     }
     results = []
     while True:
-        resp = requests.post(url, headers=HEADERS, json=payload, timeout=HTTP_TIMEOUT)
-        resp.raise_for_status()
+        # 읽기만 하므로 몇 번을 다시 보내도 안전하다.
+        resp = post_with_retry(url, headers=HEADERS, json=payload, label="노션 조회")
         data = resp.json()
         results.extend(data.get("results", []))
         if not data.get("has_more"):
@@ -219,7 +216,10 @@ def format_digest(data: dict) -> tuple[str, str]:
 def send_push(title: str, message: str) -> None:
     # ntfy.sh는 구독자 수를 알려주지 않는 단순 발행-구독 방식이라, 여기서
     # HTTP 상태만 확인할 뿐 실제 수신 여부(구독 앱이 켜져 있는지 등)는 알 수 없다.
-    resp = requests.post(
+    #
+    # 아침 알림은 하루에 한 번뿐이라 여기서 놓치면 그날은 없는 것과 같다.
+    # 타임아웃 뒤 다시 보내 알림이 두 번 뜰 수는 있지만, 아예 안 오는 것보다 낫다.
+    post_with_retry(
         NTFY_API,
         json={
             "topic": NTFY_TOPIC,
@@ -227,9 +227,8 @@ def send_push(title: str, message: str) -> None:
             "message": message,
             "click": APP_URL,
         },
-        timeout=HTTP_TIMEOUT,
+        label="푸시 발송",
     )
-    resp.raise_for_status()
 
 
 def write_today_json(data: dict) -> None:

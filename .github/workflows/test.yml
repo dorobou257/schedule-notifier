@@ -3,7 +3,9 @@ name: test
 # tests/ 는 있는데 아무 워크플로도 돌리지 않아서, 그동안 로컬에서 깜빡하면
 # 깨진 채로 푸시돼도 아무도 몰랐다. 이제 푸시·PR마다 돌린다.
 #
-# 의존성이 없으므로 npm install 없이 node --test만 돌리면 된다(package.json 참고).
+# 프런트는 의존성이 없으므로 npm install 없이 node --test만 돌리면 된다
+# (package.json 참고). 파이썬 쪽은 requests 하나만 있으면 된다 — 재시도
+# 테스트는 세션을 갈아끼우므로 실제로 네트워크에 나가지 않는다.
 
 on:
   push:
@@ -23,3 +25,8 @@ jobs:
         with:
           node-version: "20"
       - run: npm test
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install requests
+      - run: python -m unittest discover -s tests -p "test_*.py"
