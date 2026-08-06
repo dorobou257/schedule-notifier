@@ -1076,6 +1076,26 @@ function openWakeTimeSheet() {
 
 // ---- 제안 시트 ----
 
+/**
+ * 조정 내역을 블록당 한 줄로 합친다.
+ *
+ * computeSchedule은 시간을 회수할 때 최소 길이까지 한 번, 그래도 모자라면 0까지
+ * 한 번, 이렇게 두 번 훑는다. 그래서 같은 블록이 목록에 두 번 나올 수 있고
+ * 예전 시트는 그걸 각각 한 줄로 그려서 "여유 2시간 → 30분"과 "여유 30분 → 0분"이
+ * 나란히 떴다. 처음 길이와 마지막 결과만 남겨 한 줄로 만든다.
+ *
+ * @returns {Map<string, {id, name, before, after}>} 원래 순서를 유지한 맵
+ */
+function summarizeAdjustments(adjustments) {
+  const byId = new Map();
+  for (const a of adjustments) {
+    const prev = byId.get(a.id);
+    if (prev) prev.after = a.after; // 마지막까지 줄어든 결과가 최종
+    else byId.set(a.id, { id: a.id, name: a.name, before: a.before, after: a.after });
+  }
+  return byId;
+}
+
 function openProposalSheet() {
   state.activeSheet = "proposal";
   const overrides = new Set(store.today.protectedOverrides || []);
@@ -1086,19 +1106,48 @@ function openProposalSheet() {
   // 체크박스로 되돌려준다 — 키보드로 여러 개를 연달아 끄고 켤 수 있어야 한다.
   function render(refocusId) {
     const { result } = computeForToday(new Date(), overrides);
-    const rows = result.adjustments.map((adj) => {
-      const row = el("div", { className: "proposal-row", dataset: { id: adj.id } });
+
+    // 목록에 세울 블록들.
+    //
+    // result.adjustments만 쓰면 체크를 해제한 항목이 사라진다 — 해제하는 순간
+    // 그 블록은 "유지"가 되어 더 이상 조정 대상이 아니기 때문이다. 그러면 다시
+    // 켤 줄 자체가 없어져서 체크박스가 한 방향으로만 동작했다. 그래서 아무것도
+    // 해제하지 않았을 때의 목록(기준)과 지금 목록을 합쳐서 줄을 유지한다.
+    // 지금 목록에만 있는 블록도 있다 — 하나를 지키면 그만큼을 다른 블록이
+    // 대신 물어야 하므로, 원래는 멀쩡하던 블록이 새로 줄어들 수 있다.
+    const baseline = summarizeAdjustments(computeForToday(new Date(), new Set()).result.adjustments);
+    const current = summarizeAdjustments(result.adjustments);
+    const listedIds = [...baseline.keys(), ...[...current.keys()].filter((id) => !baseline.has(id))];
+
+    const rows = listedIds.map((id) => {
+      const kept = overrides.has(id);
+      const adj = current.get(id) || baseline.get(id);
+      const row = el("div", { className: "proposal-row" + (kept ? " is-kept" : ""), dataset: { id } });
+
       const checkbox = el("input", { type: "checkbox" });
-      checkbox.checked = !overrides.has(adj.id);
+      checkbox.checked = !kept;
       checkbox.addEventListener("change", () => {
-        if (checkbox.checked) overrides.delete(adj.id);
-        else overrides.add(adj.id);
-        render(adj.id);
+        if (checkbox.checked) overrides.delete(id);
+        else overrides.add(id);
+        render(id);
       });
       row.appendChild(checkbox);
-      const label = adj.type === "removed" ? `${adj.name} 삭제` : `${adj.name} ${formatDuration(adj.before)} → ${formatDuration(adj.after)}`;
+
+      // 체크를 해제했거나(유지) 이번 계산에서 손대지 않게 된 블록은 원래 길이를
+      // 그대로 적어준다 — "줄어들 뻔했지만 지킨다"가 한눈에 보여야 한다.
+      const untouched = kept || !current.has(id);
+      const label = untouched
+        ? `${adj.name} ${formatDuration(adj.before)} 유지`
+        : adj.after === 0
+          ? `${adj.name} 삭제`
+          : `${adj.name} ${formatDuration(adj.before)} → ${formatDuration(adj.after)}`;
       row.appendChild(el("span", { className: "proposal-row__label", textContent: label }));
-      row.appendChild(el("span", { className: "proposal-row__delta", textContent: `−${formatDuration(adj.before - adj.after)}` }));
+      row.appendChild(
+        el("span", {
+          className: "proposal-row__delta",
+          textContent: untouched ? "그대로" : `−${formatDuration(adj.before - adj.after)}`,
+        })
+      );
       return row;
     });
 

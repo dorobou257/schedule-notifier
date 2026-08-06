@@ -323,6 +323,9 @@ button.sleep-btn.is-active{ background:var(--accent-ink); }
 .proposal-row input[type="checkbox"]{ width:19px; height:19px; accent-color:var(--accent); flex:none; }
 .proposal-row__label{ flex:1; font-size:14.5px; }
 .proposal-row__delta{ font-size:13px; font-weight:700; color:var(--accent-ink); }
+/* 체크를 해제해 "오늘은 지킨다"고 정한 줄. 목록에는 남아 있어야 다시 켤 수 있다. */
+.proposal-row.is-kept .proposal-row__label{ color:var(--muted); }
+.proposal-row.is-kept .proposal-row__delta{ color:var(--faint); font-weight:600; }
 .proposal-summary{ margin-top:14px; padding:12px 14px; background:var(--surface-2); border-radius:12px; font-size:13.5px; color:var(--muted); display:flex; flex-direction:column; gap:4px; }
 .proposal-summary strong{ color:var(--ink); }
 
