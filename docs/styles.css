@@ -97,6 +97,8 @@ header .actions{ flex:none; display:flex; gap:8px; }
   box-shadow:var(--shadow); transition:transform .5s ease, color .2s ease;
 }
 .icon-btn:active{ color:var(--accent); }
+/* 주간 화면을 보고 있는 동안은 달력 버튼이 켜져 있다 */
+.icon-btn.is-on{ color:var(--accent); background:var(--accent-soft); border-radius:10px; }
 .icon-btn.spin svg{ animation:spin .6s linear; }
 @keyframes spin{ to{ transform:rotate(360deg); } }
 @media (prefers-reduced-motion: reduce){ .icon-btn.spin svg{ animation:none; } }
@@ -255,6 +257,45 @@ input.row-check{
 li.row.is-checked{ opacity:.5; transition:opacity 200ms ease; }
 li.row.is-checked .text{ text-decoration:line-through; }
 @media (prefers-reduced-motion: reduce){ li.row.is-checked{ transition:none; } }
+
+/* ---------- 이번 주 화면 ---------- */
+.week{ display:flex; flex-direction:column; gap:12px; }
+.card-head .spacer{ flex:1; }
+
+.week__nav{ display:flex; align-items:center; gap:8px; }
+.week__nav-label{ flex:1; text-align:center; font-size:13px; font-weight:700; color:var(--muted); }
+button.week__nav-btn{
+  padding:7px 11px; border-radius:99px; border:1px solid var(--rule); background:none;
+  color:var(--muted); font-size:12.5px; font-weight:700; cursor:pointer; white-space:nowrap;
+}
+button.week__nav-btn:active{ background:var(--surface-2); }
+
+/* 월~일 칩. 누르면 그날 카드로 스크롤한다. */
+.week__chips{ display:flex; gap:6px; }
+button.week__chip{
+  flex:1; display:flex; flex-direction:column; align-items:center; gap:3px;
+  padding:8px 0 7px; border-radius:12px; border:1px solid var(--rule);
+  background:var(--surface); color:var(--muted); cursor:pointer; min-width:0;
+}
+.week__chip-day{ font-size:11px; font-weight:800; letter-spacing:.02em; }
+.week__chip-date{ font-size:14px; font-weight:800; color:var(--ink); }
+.week__chip-dot{ width:4px; height:4px; border-radius:99px; background:var(--accent); }
+button.week__chip.is-past{ opacity:.5; }
+button.week__chip.is-holiday .week__chip-day{ color:var(--red); }
+button.week__chip.is-today{ border-color:var(--accent); background:var(--accent-soft); }
+button.week__chip.is-today .week__chip-date{ color:var(--accent-ink); }
+
+/* 하루 카드. 오늘만 테두리로 도드라지게 하고, 지난 날은 흐리게 둔다. */
+section.card.week__day{ animation:none; opacity:1; transform:none; scroll-margin-top:12px; }
+section.card.week__day.is-today{ border-color:var(--accent); }
+section.card.week__day.is-past{ opacity:.62; }
+.week__badge{
+  flex:none; padding:2px 7px; border-radius:99px; background:var(--accent); color:var(--on-accent);
+  font-size:10.5px; font-weight:800;
+}
+.week__holiday{ margin:0 14px 4px; font-size:12.5px; font-weight:700; color:var(--red); }
+/* 접어둔 하루 전체 루틴 — 읽기 전용이라 끌 수도, 누를 수도 없다. */
+.week__routine li.agenda__row{ cursor:default; }
 
 /* 소설 일정 행의 "어느 집필 블록에 배정됐는지" 버튼 */
 button.row-assign{

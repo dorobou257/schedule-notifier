@@ -31,6 +31,7 @@ import {
   resolveNovelAssignments,
 } from "./novel-assign.js";
 import { enableDragReorder, enableLongPress, isDragging } from "./drag.js";
+import { openWeek, renderWeekView, weekRangeLabel } from "./week.js";
 import {
   DAY_NAMES,
   LECTURE_CATEGORY,
@@ -61,6 +62,7 @@ const ICONS = {
   trash: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3m-8 0 1 13h10l1-13"/></svg>',
   close: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6 6 18"/></svg>',
   moon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z"/></svg>',
+  calendar: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M8 3v4M16 3v4M3 10h18"/></svg>',
 };
 
 function el(tag, props = {}, children = []) {
@@ -242,6 +244,7 @@ function computeForToday(now, protectedIds) {
 // ---------------------------------------------------------------
 
 const state = {
+  view: "today", // 'today' | 'week' — 라우팅 없이 #app 안에서만 갈아끼운다
   todayData: null, // today.json 파싱 결과
   computed: null, // 마지막 computeForToday().result
   agendaExpanded: false,
@@ -403,14 +406,39 @@ function renderShell() {
   state.wakeMinutes = wakeMinutes;
 
   renderHeader(now);
-  renderMain(now);
+  if (state.view === "week") renderWeekMain();
+  else renderMain(now);
   renderSleepBar();
   scheduleTick();
-  maybeShowProposal();
+  // 조정 제안은 오늘 화면에 대한 이야기다. 주간 화면을 열자마자 시트가 덮으면
+  // 무슨 화면인지도 보기 전에 판단을 강요당한다.
+  if (state.view === "today") maybeShowProposal();
+}
+
+function renderWeekMain() {
+  const app = document.getElementById("app");
+  app.innerHTML = "";
+  // 1분 틱이 갱신할 "지금 카드"가 이 화면엔 없다.
+  state.nowCardEls = null;
+  app.appendChild(
+    renderWeekView({
+      todayKey: lastRenderedDateKey,
+      todayBlocks: state.computed.blocks,
+      rerender: () => renderShell(),
+    })
+  );
 }
 
 function renderHeader(now) {
   const d = state.todayData || {};
+  const title = document.getElementById("title");
+  if (state.view === "week") {
+    document.getElementById("date-label").textContent = weekRangeLabel();
+    title.textContent = "이번 주";
+    document.getElementById("weekday-label").textContent = "";
+    return;
+  }
+  title.textContent = "오늘 정리";
   // 노션이 준 "2026-07-31"을 그대로 걸어두면 지금이 며칠인지 한눈에 안 들어온다.
   const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d.date || "");
   document.getElementById("date-label").textContent = iso
@@ -975,6 +1003,9 @@ function updateNowCard() {
   // 드래그로 순서를 바꾸는 중이라면 화면을 갈아끼우면 안 된다 — 잡고 있던
   // 요소가 통째로 사라져 드래그가 끊긴다. 다음 틱에서 따라잡는다.
   if (isDragging()) return;
+  // 주간 화면에는 갱신할 것도, 다시 그릴 이유도 없다 — 여기서 막지 않으면
+  // 블록이 바뀌는 순간 renderMain이 주간 화면을 오늘 화면으로 덮어버린다.
+  if (state.view === "week") return;
   const now = new Date();
   const dayBoundaryHour = store.settings.dayBoundaryHour;
   const nowMinutes = dateToBoundaryMinutes(now, dayBoundaryHour);
@@ -1974,6 +2005,18 @@ document.getElementById("refresh-btn").addEventListener("click", () => loadToday
 document.getElementById("settings-btn").addEventListener("click", openSettingsSheet);
 document.getElementById("settings-btn").innerHTML = ICONS.gear;
 document.getElementById("refresh-btn").innerHTML = ICONS.refresh;
+
+const weekBtn = document.getElementById("week-btn");
+weekBtn.innerHTML = ICONS.calendar;
+weekBtn.addEventListener("click", () => {
+  state.view = state.view === "week" ? "today" : "week";
+  weekBtn.classList.toggle("is-on", state.view === "week");
+  weekBtn.setAttribute("aria-pressed", state.view === "week" ? "true" : "false");
+  // 주간 화면을 열 때마다 오늘이 속한 주부터 다시 시작한다(지난주를 보다 닫고
+  // 다시 열었는데 지난주가 나오면 지금이 언제인지 헷갈린다).
+  if (state.view === "week") openWeek(lastRenderedDateKey, () => renderShell());
+  renderShell();
+});
 
 loadTodayJson(false);
 
