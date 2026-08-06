@@ -1,9 +1,12 @@
-const SHELL_CACHE = "schedule-shell-v7";
+const SHELL_CACHE = "schedule-shell-v8";
 const SHELL_FILES = [
   "./",
   "./index.html",
   "./styles.css",
   "./routine.js",
+  "./store.js",
+  "./novel-assign.js",
+  "./drag.js",
   "./app.js",
   "./config.js",
   "./manifest.json",

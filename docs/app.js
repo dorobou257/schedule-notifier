@@ -1,8 +1,6 @@
 // 상태·렌더링·상호작용. routine.js의 순수 계산 결과를 화면에 붙이는 역할만
 // 한다 — 스케줄 계산 로직은 여기 두지 않는다(테스트 가능하게 분리 유지).
 import {
-  BASE_BLOCKS,
-  DEFAULT_SETTINGS,
   computeSchedule,
   computeWakeMinutes,
   hhmmToBoundaryMinutes,
@@ -13,8 +11,25 @@ import {
   applyVisibleOrder,
 } from "./routine.js";
 import { WORKER_URL } from "./config.js";
+import {
+  store,
+  setStore,
+  defaultStore,
+  migrate,
+  saveStore,
+  rolloverIfStale,
+  emptySleep,
+  nextDateKey,
+} from "./store.js";
+import {
+  novelKey,
+  novelLabel,
+  targetCategoryOf,
+  blocksOfCategory,
+  resolveNovelAssignments,
+} from "./novel-assign.js";
+import { enableDragReorder, enableLongPress, isDragging } from "./drag.js";
 
-const STORAGE_KEY = "schedule.v1";
 const WEEKDAY_NAMES = ["월요일", "화요일", "수요일", "목요일", "금요일", "토요일", "일요일"];
 
 // 블록 category(한글) → CSS data-cat 키(5색). 노션 태그도 같은 5색을 공유한다.
@@ -60,136 +75,6 @@ function formatDuration(mins) {
   if (h && rest) return `${h}시간 ${rest}분`;
   if (h) return `${h}시간`;
   return `${rest}분`;
-}
-
-// ---------------------------------------------------------------
-// 저장소 — localStorage 단일 키. 쓰기는 디바운스, 확정 동작(적용/되돌리기
-// 등)은 즉시 쓴다.
-// ---------------------------------------------------------------
-
-function emptySleep() {
-  // forDate: 이 취침 기록이 "어느 논리적 날짜의 기상"을 예측하는지. 취침은 보통
-  // 밤에 기록하므로 forDate는 대개 지금(now)의 논리적 날짜보다 하루 뒤다 —
-  // 그래서 그날 밤 동안은 "예정" 상태로만 저장해두고, 실제로 그 날짜가 되어야
-  // 오늘 일정 계산에 반영한다(applySleepToday 참고).
-  return { forDate: null, bedAt: null, wakeOverride: null, protectedOverrides: [], accepted: false };
-}
-
-/** "YYYY-MM-DD" 하루 뒤의 같은 형식 날짜 키. */
-function nextDateKey(dateKey) {
-  const [y, m, d] = dateKey.split("-").map(Number);
-  const dt = new Date(y, m - 1, d + 1);
-  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
-}
-
-function defaultStore() {
-  return {
-    version: 1,
-    settings: { ...DEFAULT_SETTINGS },
-    blocks: BASE_BLOCKS.map((b) => ({ ...b })),
-    presets: {},
-    today: emptySleep(),
-    // 그날 하루만 적용되는 손질. 날짜가 바뀌면 통째로 비운다.
-    //   categories[blockId]: 오늘만 이 블록을 다른 성격으로 취급(집필↔작업)
-    //   showRoutine: 특별 일정이 있는 날에도 루틴을 펼쳐서 볼지
-    dayTweaks: { date: null, categories: {}, showRoutine: false },
-    // 소설 일정 ↔ 집필 블록 배정. map[blockId] = 소설 항목 키(사용자가 직접 지정),
-    // excluded = 어디에도 배정하지 않기로 한 항목 키들. 둘 다 해당 없는 항목은
-    // 남은 집필 블록에 순서대로 자동 배정된다. 날짜가 바뀌면 통째로 비운다.
-    novelAssign: { date: null, map: {}, excluded: [] },
-  };
-}
-
-/** 소설 항목의 안정적인 키. 노션 페이지 id가 있으면 그걸 쓰고, 아직
- *  today.json이 갱신되지 않아 id가 없으면 내용으로 키를 만든다. */
-function novelKey(item) {
-  return item.id || `${(item.tags || []).join("/")}|${item.text || ""}`;
-}
-
-function migrate(parsed) {
-  const base = defaultStore();
-  return {
-    version: 1,
-    settings: { ...base.settings, ...(parsed.settings || {}) },
-    blocks: Array.isArray(parsed.blocks) && parsed.blocks.length ? parsed.blocks : base.blocks,
-    presets: parsed.presets && typeof parsed.presets === "object" ? parsed.presets : {},
-    today: parsed.today && typeof parsed.today === "object" ? { ...emptySleep(), ...parsed.today } : base.today,
-    dayTweaks:
-      parsed.dayTweaks && typeof parsed.dayTweaks.categories === "object"
-        ? {
-            date: parsed.dayTweaks.date || null,
-            categories: parsed.dayTweaks.categories,
-            showRoutine: !!parsed.dayTweaks.showRoutine,
-          }
-        : base.dayTweaks,
-    novelAssign:
-      parsed.novelAssign && typeof parsed.novelAssign.map === "object"
-        ? {
-            date: parsed.novelAssign.date || null,
-            map: parsed.novelAssign.map,
-            excluded: Array.isArray(parsed.novelAssign.excluded) ? parsed.novelAssign.excluded : [],
-          }
-        : base.novelAssign,
-  };
-}
-
-function loadStore() {
-  let raw = null;
-  try {
-    raw = localStorage.getItem(STORAGE_KEY);
-  } catch {
-    raw = null;
-  }
-  if (!raw) return defaultStore();
-  try {
-    return migrate(JSON.parse(raw));
-  } catch {
-    return defaultStore();
-  }
-}
-
-let saveTimer = null;
-function saveStore(immediate) {
-  const write = () => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
-    } catch {
-      /* localStorage 접근 불가(사생활 보호 모드 등) — 조용히 무시, 세션 동안은 메모리 상태로 계속 동작 */
-    }
-  };
-  clearTimeout(saveTimer);
-  if (immediate) {
-    write();
-  } else {
-    saveTimer = setTimeout(write, 400);
-  }
-}
-
-let store = loadStore();
-
-/**
- * 취침 기록이 예측하는 날짜(forDate)가 이미 지나버렸으면(오늘보다 이전이면)
- * 낡은 기록이니 비운다. forDate가 오늘이거나(적용 중) 내일이면(아직 밤이라
- * 대기 중) 그대로 둔다 — 이 둘을 구분 못 하고 무조건 지우면, 밤에 기록해둔
- * 취침이 자정~새벽 사이 논리적 날짜가 바뀌는 순간 적용되기도 전에 사라진다.
- */
-function rolloverIfStale(now) {
-  const todayKey = logicalDateKey(now, store.settings.dayBoundaryHour);
-  if (store.today.forDate && store.today.forDate < todayKey) {
-    store.today = emptySleep();
-    saveStore(true);
-    state.proposalDismissed = false;
-  }
-  // 소설 배정은 그날 하루짜리다 — 날짜가 바뀌면 비우고 다시 자동 배정한다.
-  if (store.novelAssign.date !== todayKey) {
-    store.novelAssign = { date: todayKey, map: {}, excluded: [] };
-    saveStore(true);
-  }
-  // 집필↔작업 교체도 오늘 하루짜리 — 내일은 원래 루틴으로 돌아간다.
-  if (store.dayTweaks.date !== todayKey) {
-    store.dayTweaks = { date: todayKey, categories: {}, showRoutine: false };
-    saveStore(true);
-  }
 }
 
 // ---------------------------------------------------------------
@@ -409,7 +294,8 @@ async function setItemDone(item, done) {
 
 function renderShell() {
   const now = new Date();
-  rolloverIfStale(now);
+  // 취침 기록이 낡아 비워졌다면 제안 시트를 다시 띄울 수 있게 "닫아둠"을 푼다.
+  if (rolloverIfStale(now)) state.proposalDismissed = false;
   lastRenderedDateKey = logicalDateKey(now, store.settings.dayBoundaryHour);
 
   const { result, wakeMinutes } = computeForToday(now);
@@ -438,7 +324,7 @@ function renderMain(now) {
   app.innerHTML = "";
   const d = state.todayData || {};
   // 완료 여부와 유형에 따라 어느 블록에 붙일지는 resolveNovelAssignments가 가린다.
-  state.novelAssignments = resolveNovelAssignments(state.computed.blocks, d.novel_items || []);
+  state.novelAssignments = resolveNovelAssignments(state.computed.blocks, d.novel_items || [], store.novelAssign);
 
   if (d.holiday_names && d.holiday_names.length) {
     const banner = el("div", { className: "banner banner--holiday" });
@@ -567,85 +453,6 @@ function renderSpecialScheduleCard(items, now) {
   });
   section.appendChild(ul);
   return section;
-}
-
-// ---------------------------------------------------------------
-// 소설 일정 ↔ 집필 블록 배정
-//
-// 노션에 "오늘 44화 초고" 같은 소설 일정이 있어도 하루 중 언제 쓸지는
-// 앱이 계산한 집필 블록에만 있었다. 둘을 이어붙여서 "2차 집필 = 44화 초고"로
-// 보이게 한다. 기본은 순서대로 자동 배정이고, 사용자가 지정하면 그게 이긴다.
-// ---------------------------------------------------------------
-
-/** 오늘 실제로 시간이 배정된 해당 성격의 블록들(시간순). */
-function blocksOfCategory(blocks, category) {
-  return blocks.filter((b) => b.category === category && b.minutes > 0);
-}
-
-// 실제로 원고를 쓰는 단계만 "집필"에 붙는다. 트리트먼트/시놉시스/설정은
-// 자료를 만지는 일에 가까우니 "작업"으로 간다.
-const WRITING_STAGES = new Set(["초고", "퇴고"]);
-// 연재는 올려두기만 하면 되는 일이라 하루의 어느 블록도 차지하지 않는다.
-const UNSCHEDULED_STAGES = new Set(["연재"]);
-
-/** 소설 항목의 유형. tags = [작품, 유형]. */
-function stageOf(item) {
-  return (item.tags || [])[1] || "";
-}
-
-/** 이 소설 항목이 붙을 수 있는 블록 성격. 어디에도 안 붙으면 null. */
-function targetCategoryOf(item) {
-  const stage = stageOf(item);
-  if (UNSCHEDULED_STAGES.has(stage)) return null;
-  return WRITING_STAGES.has(stage) ? "집필" : "작업";
-}
-
-/** 한 성격 안에서 블록당 1건씩 채운다. 블록보다 항목이 많으면 남는 건 배정되지 않는다. */
-function assignInto(result, targetBlocks, items) {
-  const map = store.novelAssign.map || {};
-  const excluded = new Set(store.novelAssign.excluded || []);
-  const byKey = new Map(items.map((it) => [novelKey(it), it]));
-  const used = new Set();
-
-  // 1) 사용자가 직접 지정한 것부터.
-  for (const b of targetBlocks) {
-    const key = map[b.id];
-    if (key && byKey.has(key)) {
-      result.set(b.id, byKey.get(key));
-      used.add(key);
-    }
-  }
-  // 2) 남은 항목을 아직 비어 있는 블록에 순서대로 채운다.
-  //    "배정 해제"한 항목(excluded)은 자동 배정에서도 제외된다.
-  const rest = items.filter((it) => !used.has(novelKey(it)) && !excluded.has(novelKey(it)));
-  let i = 0;
-  for (const b of targetBlocks) {
-    if (result.has(b.id)) continue;
-    if (i >= rest.length) break;
-    result.set(b.id, rest[i++]);
-  }
-}
-
-/** @returns {Map<string, object>} blockId → 소설 항목 */
-function resolveNovelAssignments(blocks, novelItems) {
-  const result = new Map();
-  // 이미 완료한 항목은 자리를 차지하지 않는다 — 다음 일정이 당겨진다.
-  const pending = novelItems.filter((it) => !it.done);
-  for (const category of ["집필", "작업"]) {
-    assignInto(
-      result,
-      blocksOfCategory(blocks, category),
-      pending.filter((it) => targetCategoryOf(it) === category)
-    );
-  }
-  return result;
-}
-
-/** "[챌린지] 초고 · 44화" 형태의 한 줄 요약. */
-function novelLabel(item) {
-  const tags = (item.tags || []).filter(Boolean);
-  const head = tags.length ? `[${tags.join(" ")}] ` : "";
-  return head + (item.text || "");
 }
 
 function findCurrentIndex(blocks, nowMinutes) {
@@ -958,7 +765,7 @@ function reloadIfDayChanged() {
 function updateNowCard() {
   // 드래그로 순서를 바꾸는 중이라면 화면을 갈아끼우면 안 된다 — 잡고 있던
   // 요소가 통째로 사라져 드래그가 끊긴다. 다음 틱에서 따라잡는다.
-  if (dragActive) return;
+  if (isDragging()) return;
   if (!state.nowCardEls) {
     // 블록 경계를 넘었을 수 있으니(예: 다음 블록으로 진입) 전체를 다시 그린다.
     renderMain(new Date());
@@ -1397,66 +1204,6 @@ function selectField(options, current) {
   return select;
 }
 
-// 드래그가 진행 중인 동안엔 1분 틱의 자동 렌더를 멈춘다(updateNowCard 참고).
-let dragActive = false;
-
-const REDUCED_MOTION = () => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-
-/** 짧은 진동 피드백. 지원하지 않는 브라우저(iOS Safari 등)에서는 조용히 무시된다. */
-function buzz(ms) {
-  if (REDUCED_MOTION()) return;
-  try {
-    navigator.vibrate?.(ms);
-  } catch {}
-}
-
-/** el에서 위로 올라가며 실제로 세로 스크롤되는 조상을 찾는다. 없으면 문서 스크롤. */
-function scrollParentOf(el) {
-  for (let p = el.parentElement; p; p = p.parentElement) {
-    const oy = getComputedStyle(p).overflowY;
-    if ((oy === "auto" || oy === "scroll") && p.scrollHeight > p.clientHeight) return p;
-  }
-  return document.scrollingElement || document.documentElement;
-}
-
-// 순서 편집이 아닐 때의 "꾹 누르기". 드래그(300ms)보다 조금 길게 잡아
-// 실수로 발동하지 않게 한다. 8px 넘게 움직이면 스크롤로 보고 취소.
-function enableLongPress(listEl, itemSelector, onLongPress) {
-  let target = null;
-  let startY = 0;
-  let timer = null;
-  let pointerId = null;
-
-  function cancel() {
-    clearTimeout(timer);
-    if (target) target.classList.remove("pressing");
-    target = null;
-  }
-
-  listEl.addEventListener("pointerdown", (e) => {
-    if (target) return;
-    const li = e.target.closest(itemSelector);
-    if (!li || !listEl.contains(li)) return;
-    target = li;
-    startY = e.clientY;
-    pointerId = e.pointerId;
-    li.classList.add("pressing");
-    timer = setTimeout(() => {
-      const hit = target;
-      target = null;
-      hit.classList.remove("pressing");
-      buzz(12);
-      onLongPress(hit);
-    }, 450);
-  });
-
-  listEl.addEventListener("pointermove", (e) => {
-    if (target && e.pointerId === pointerId && Math.abs(e.clientY - startY) > 8) cancel();
-  });
-  listEl.addEventListener("pointerup", cancel);
-  listEl.addEventListener("pointercancel", cancel);
-}
-
 /** 오늘 하루만 이 블록의 성격을 집필↔작업으로 맞바꾸는 시트. 루틴 자체는 그대로 둔다. */
 function openCategorySwapSheet(blockId) {
   const b = state.computed.blocks.find((x) => x.id === blockId);
@@ -1502,212 +1249,6 @@ function openCategorySwapSheet(blockId) {
   );
 }
 
-// 노션식 드래그 재배열: 300ms 길게 누르면 드래그 모드로 들어가고,
-// 그 전에 놓거나 8px 넘게 움직이면 각각 "탭"/"스크롤"로 취급한다.
-// 매 이동마다 전체를 다시 그리지 않고 transform과 필요할 때만의
-// insertBefore 한 번으로 처리해 화면이 가볍게 반응하도록 한다.
-//
-// itemSelector로 드래그 대상 요소를 지정한다(루틴 편집 시트는 li.block-item,
-// 메인 화면 "오늘 하루"는 li.agenda__row). data-fixed="1"인 항목은 잡을 수도
-// 없고 다른 항목이 그 자리를 넘어갈 수도 없는 "벽"으로 동작한다 — 점심(시각
-// 고정)이나 기상/취침처럼 하루의 뼈대를 이루는 블록을 위한 장치다.
-function enableDragReorder(listEl, onReorder, onTap, itemSelector = "li.block-item") {
-  let dragEl = null;
-  let startY = 0; // 이 값을 기준으로 translateY를 계산한다(스왑 때마다 레이아웃 이동량만큼 보정)
-  let pressTimer = null;
-  let dragging = false;
-  let pointerId = null;
-  let lastY = 0;
-  let originalOrder = null; // pointercancel 때 되돌리기 위한 스냅샷
-  let autoScrollRaf = null;
-
-  const items = () => Array.from(listEl.querySelectorAll(itemSelector));
-  const movable = (li) => li.dataset.fixed !== "1";
-
-  /** FLIP: 레이아웃이 바뀐 형제들이 새 자리로 미끄러져 가는 것처럼 보이게 한다. */
-  function flip(measured) {
-    if (REDUCED_MOTION()) return;
-    for (const [el, prevTop] of measured) {
-      const delta = prevTop - el.getBoundingClientRect().top;
-      if (!delta) continue;
-      el.animate([{ transform: `translateY(${delta}px)` }, { transform: "none" }], {
-        duration: 180,
-        easing: "cubic-bezier(.2,.8,.2,1)",
-      });
-    }
-  }
-
-  function stopAutoScroll() {
-    if (autoScrollRaf) cancelAnimationFrame(autoScrollRaf);
-    autoScrollRaf = null;
-  }
-
-  // 손가락이 스크롤 영역의 위/아래 끝에 닿아 있는 동안 리스트를 계속 굴려준다.
-  // 이게 없으면 화면 밖으로 블록을 옮길 방법이 없다.
-  function autoScroll() {
-    autoScrollRaf = null;
-    if (!dragging || !dragEl) return;
-    const sp = scrollParentOf(dragEl);
-    const isDoc = sp === document.scrollingElement || sp === document.documentElement;
-    const top = isDoc ? 0 : sp.getBoundingClientRect().top;
-    const bottom = isDoc ? window.innerHeight : sp.getBoundingClientRect().bottom;
-    const EDGE = 48;
-    const STEP = 7; // 프레임당 px ≈ 초당 400px
-    let dy = 0;
-    if (lastY < top + EDGE) dy = -STEP;
-    else if (lastY > bottom - EDGE) dy = STEP;
-    if (dy) {
-      const before = sp.scrollTop;
-      sp.scrollTop += dy;
-      // 실제로 스크롤된 만큼만 기준점을 옮겨야 블록이 손가락에 붙어 있다.
-      startY -= sp.scrollTop - before;
-      applyTransform();
-      reorderAt(lastY);
-    }
-    autoScrollRaf = requestAnimationFrame(autoScroll);
-  }
-
-  function applyTransform() {
-    dragEl.style.transform = `translateY(${lastY - startY}px) scale(1.03)`;
-  }
-
-  /** 포인터 y좌표를 기준으로 필요하면 이웃과 자리를 바꾼다. */
-  function reorderAt(clientY) {
-    for (const sib of items()) {
-      if (sib === dragEl) continue;
-      const r = sib.getBoundingClientRect();
-      const mid = r.top + r.height / 2;
-      const dragIsBefore = !!(dragEl.compareDocumentPosition(sib) & Node.DOCUMENT_POSITION_FOLLOWING);
-      const crossing = (clientY > mid && dragIsBefore) || (clientY < mid && !dragIsBefore);
-      if (!crossing) continue;
-      // 고정 항목은 넘어갈 수 없다 — 여기서 멈춘다.
-      if (!movable(sib)) break;
-
-      const measured = items()
-        .filter((x) => x !== dragEl)
-        .map((x) => [x, x.getBoundingClientRect().top]);
-      const prevOffsetTop = dragEl.offsetTop;
-
-      listEl.insertBefore(dragEl, clientY > mid ? sib.nextSibling : sib);
-
-      // 스왑으로 dragEl 자신의 레이아웃 위치가 바뀐 만큼 기준점을 보정한다.
-      // (예전 코드는 startY = clientY로 리셋해서 블록 높이가 다르면 손가락과
-      //  블록이 어긋났다. offsetTop은 transform의 영향을 받지 않아 안전하다.)
-      startY += dragEl.offsetTop - prevOffsetTop;
-      applyTransform();
-      flip(measured);
-      buzz(6);
-      break;
-    }
-  }
-
-  function cleanupVisual() {
-    dragActive = false;
-    listEl.classList.remove("is-dragging");
-    stopAutoScroll();
-    if (!dragEl) return;
-    dragEl.classList.remove("pressing");
-    dragEl.classList.remove("dragging");
-    dragEl.style.transform = "";
-  }
-
-  listEl.addEventListener("pointerdown", (e) => {
-    if (dragEl) return; // 드래그 중 두 번째 손가락은 무시
-    const li = e.target.closest(itemSelector);
-    if (!li || !listEl.contains(li) || !movable(li)) return;
-    dragEl = li;
-    startY = lastY = e.clientY;
-    pointerId = e.pointerId;
-    dragging = false;
-    dragEl.classList.add("pressing");
-    pressTimer = setTimeout(() => {
-      dragging = true;
-      dragActive = true;
-      originalOrder = items();
-      dragEl.classList.remove("pressing");
-      dragEl.classList.add("dragging");
-      listEl.classList.add("is-dragging");
-      dragEl.style.transform = "scale(1.03)";
-      buzz(12);
-      try {
-        dragEl.setPointerCapture(pointerId);
-      } catch {}
-    }, 300);
-  });
-
-  // 비패시브 touchmove — pointermove의 preventDefault로는 이미 시작된 네이티브
-  // 스크롤/새로고침 제스처를 취소할 수 없다. 드래그는 300ms 정지 후 시작되므로
-  // 이 시점엔 아직 스크롤이 시작되지 않아 여기서 확실히 막을 수 있다.
-  listEl.addEventListener(
-    "touchmove",
-    (e) => {
-      if (dragging) e.preventDefault();
-    },
-    { passive: false }
-  );
-
-  listEl.addEventListener("pointermove", (e) => {
-    if (!dragEl || e.pointerId !== pointerId) return;
-    if (!dragging) {
-      if (Math.abs(e.clientY - startY) > 8) {
-        clearTimeout(pressTimer);
-        dragEl.classList.remove("pressing");
-        dragEl = null;
-      }
-      return;
-    }
-    e.preventDefault();
-    lastY = e.clientY;
-    applyTransform();
-    reorderAt(lastY);
-    if (!autoScrollRaf) autoScrollRaf = requestAnimationFrame(autoScroll);
-  });
-
-  function endDrag(e) {
-    if (e && dragEl && e.pointerId !== pointerId) return;
-    clearTimeout(pressTimer);
-    if (!dragEl) {
-      dragging = false;
-      return;
-    }
-    const el = dragEl;
-    const wasDragging = dragging;
-    const id = el.dataset.id;
-
-    if (wasDragging) {
-      // 손가락을 뗀 자리에서 제자리로 스르륵 안착시킨다.
-      const from = el.style.transform;
-      cleanupVisual();
-      if (!REDUCED_MOTION()) {
-        el.animate([{ transform: from }, { transform: "none" }], {
-          duration: 180,
-          easing: "cubic-bezier(.2,.8,.2,1)",
-        });
-      }
-      onReorder(items().map((x) => x.dataset.id));
-    } else {
-      cleanupVisual();
-      onTap(id);
-    }
-    dragEl = null;
-    dragging = false;
-    originalOrder = null;
-  }
-
-  function cancelDrag(e) {
-    if (e && dragEl && e.pointerId !== pointerId) return;
-    clearTimeout(pressTimer);
-    // 전화 수신 등으로 제스처가 끊기면 중간 순서를 저장하지 말고 원래대로 되돌린다.
-    if (dragging && originalOrder) originalOrder.forEach((x) => listEl.appendChild(x));
-    cleanupVisual();
-    dragEl = null;
-    dragging = false;
-    originalOrder = null;
-  }
-
-  listEl.addEventListener("pointerup", endDrag);
-  listEl.addEventListener("pointercancel", cancelDrag);
-}
 
 function renderPresetControls() {
   const wrap = el("div", { className: "settings-group" });
@@ -1817,7 +1358,7 @@ function renderSettings() {
   resetBtn.style.marginTop = "10px";
   resetBtn.addEventListener("click", () => {
     if (confirm("모든 설정과 루틴을 기본값으로 되돌릴까요? 되돌릴 수 없습니다.")) {
-      store = defaultStore();
+      setStore(defaultStore());
       saveStore(true);
       closeSheet();
       renderShell();
@@ -1858,7 +1399,7 @@ function importData(file) {
     try {
       const parsed = JSON.parse(reader.result);
       if (!parsed || !Array.isArray(parsed.blocks) || !parsed.settings) throw new Error("invalid shape");
-      store = migrate(parsed);
+      setStore(migrate(parsed));
       saveStore(true);
       closeSheet();
       renderShell();

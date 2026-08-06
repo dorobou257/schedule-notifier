@@ -1,0 +1,150 @@
+// 저장소 — localStorage 단일 키. 쓰기는 디바운스, 확정 동작(적용/되돌리기 등)은
+// 즉시 쓴다. DOM은 건드리지 않는다 — Node(`node --test`)에서 그대로 임포트해서
+// 여러 날에 걸친 롤오버 시나리오를 재생할 수 있어야 한다.
+//
+// localStorage가 아예 없는 환경(Node)이나 접근이 막힌 환경(사생활 보호 모드)에서도
+// 죽지 않는다. 읽기·쓰기 모두 try/catch로 감싸 두었고, 그 경우 세션 동안은
+// 메모리 상태로만 동작한다.
+import { BASE_BLOCKS, DEFAULT_SETTINGS, logicalDateKey } from "./routine.js";
+
+export const STORAGE_KEY = "schedule.v1";
+
+export function emptySleep() {
+  // forDate: 이 취침 기록이 "어느 논리적 날짜의 기상"을 예측하는지. 취침은 보통
+  // 밤에 기록하므로 forDate는 대개 지금(now)의 논리적 날짜보다 하루 뒤다 —
+  // 그래서 그날 밤 동안은 "예정" 상태로만 저장해두고, 실제로 그 날짜가 되어야
+  // 오늘 일정 계산에 반영한다.
+  return { forDate: null, bedAt: null, wakeOverride: null, protectedOverrides: [], accepted: false };
+}
+
+/** "YYYY-MM-DD" 하루 뒤의 같은 형식 날짜 키. */
+export function nextDateKey(dateKey) {
+  const [y, m, d] = dateKey.split("-").map(Number);
+  const dt = new Date(y, m - 1, d + 1);
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
+}
+
+export function defaultStore() {
+  return {
+    version: 1,
+    settings: { ...DEFAULT_SETTINGS },
+    blocks: BASE_BLOCKS.map((b) => ({ ...b })),
+    presets: {},
+    today: emptySleep(),
+    // 그날 하루만 적용되는 손질. 날짜가 바뀌면 통째로 비운다.
+    //   categories[blockId]: 오늘만 이 블록을 다른 성격으로 취급(집필↔작업)
+    //   showRoutine: 특별 일정이 있는 날에도 루틴을 펼쳐서 볼지
+    dayTweaks: { date: null, categories: {}, showRoutine: false },
+    // 소설 일정 ↔ 집필 블록 배정. map[blockId] = 소설 항목 키(사용자가 직접 지정),
+    // excluded = 어디에도 배정하지 않기로 한 항목 키들. 둘 다 해당 없는 항목은
+    // 남은 집필 블록에 순서대로 자동 배정된다. 날짜가 바뀌면 통째로 비운다.
+    novelAssign: { date: null, map: {}, excluded: [] },
+  };
+}
+
+/**
+ * 저장본을 현재 모양으로 맞춘다. 낡은 버전, 손으로 고친 백업 파일, 일부 필드가
+ * 통째로 빠진 저장본까지 들어올 수 있으므로 필드마다 모양을 확인하고 아니면
+ * 기본값으로 되돌린다 — 여기서 한 번 걸러야 화면 쪽이 방어 코드를 안 써도 된다.
+ */
+export function migrate(parsed) {
+  const base = defaultStore();
+  const p = parsed && typeof parsed === "object" ? parsed : {};
+  return {
+    version: 1,
+    settings: { ...base.settings, ...(p.settings || {}) },
+    blocks: Array.isArray(p.blocks) && p.blocks.length ? p.blocks : base.blocks,
+    presets: p.presets && typeof p.presets === "object" ? p.presets : {},
+    today: p.today && typeof p.today === "object" ? { ...emptySleep(), ...p.today } : base.today,
+    dayTweaks:
+      p.dayTweaks && typeof p.dayTweaks.categories === "object"
+        ? {
+            date: p.dayTweaks.date || null,
+            categories: p.dayTweaks.categories,
+            showRoutine: !!p.dayTweaks.showRoutine,
+          }
+        : base.dayTweaks,
+    novelAssign:
+      p.novelAssign && typeof p.novelAssign.map === "object"
+        ? {
+            date: p.novelAssign.date || null,
+            map: p.novelAssign.map,
+            excluded: Array.isArray(p.novelAssign.excluded) ? p.novelAssign.excluded : [],
+          }
+        : base.novelAssign,
+  };
+}
+
+export function loadStore() {
+  let raw = null;
+  try {
+    raw = localStorage.getItem(STORAGE_KEY);
+  } catch {
+    raw = null; // localStorage 자체가 없거나(Node) 막혀 있다
+  }
+  if (!raw) return defaultStore();
+  try {
+    return migrate(JSON.parse(raw));
+  } catch {
+    return defaultStore();
+  }
+}
+
+// ES 모듈의 export는 살아있는 바인딩이라, 여기서 store를 갈아끼우면 임포트한
+// 쪽에서도 새 값이 보인다. 덕분에 app.js는 `store.settings...`를 예전처럼
+// 그대로 쓰면서, 초기화/불러오기만 setStore를 거치면 된다.
+export let store = loadStore();
+
+export function setStore(next) {
+  store = next;
+}
+
+let saveTimer = null;
+export function saveStore(immediate) {
+  const write = () => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
+    } catch {
+      /* 접근 불가(사생활 보호 모드 등) — 조용히 무시, 세션 동안은 메모리 상태로 계속 동작 */
+    }
+  };
+  clearTimeout(saveTimer);
+  if (immediate) {
+    write();
+  } else {
+    saveTimer = setTimeout(write, 400);
+  }
+}
+
+/**
+ * 하루짜리 상태들을 논리적 날짜에 맞춰 정리한다.
+ *
+ * 취침 기록이 예측하는 날짜(forDate)가 이미 지나버렸으면(오늘보다 이전이면)
+ * 낡은 기록이니 비운다. forDate가 오늘이거나(적용 중) 내일이면(아직 밤이라
+ * 대기 중) 그대로 둔다 — 이 둘을 구분 못 하고 무조건 지우면, 밤에 기록해둔
+ * 취침이 자정~새벽 사이 논리적 날짜가 바뀌는 순간 적용되기도 전에 사라진다.
+ *
+ * @returns {boolean} 취침 기록을 비웠는지. 화면 쪽은 이때 제안 시트를 다시
+ *   띄울 수 있게 "닫아둠" 표시를 푼다(그 판단은 UI의 몫이라 여기서 안 한다).
+ */
+export function rolloverIfStale(now) {
+  const todayKey = logicalDateKey(now, store.settings.dayBoundaryHour);
+  let sleepReset = false;
+
+  if (store.today.forDate && store.today.forDate < todayKey) {
+    store.today = emptySleep();
+    saveStore(true);
+    sleepReset = true;
+  }
+  // 소설 배정은 그날 하루짜리다 — 날짜가 바뀌면 비우고 다시 자동 배정한다.
+  if (store.novelAssign.date !== todayKey) {
+    store.novelAssign = { date: todayKey, map: {}, excluded: [] };
+    saveStore(true);
+  }
+  // 집필↔작업 교체도 오늘 하루짜리 — 내일은 원래 루틴으로 돌아간다.
+  if (store.dayTweaks.date !== todayKey) {
+    store.dayTweaks = { date: todayKey, categories: {}, showRoutine: false };
+    saveStore(true);
+  }
+  return sleepReset;
+}
