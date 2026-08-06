@@ -43,24 +43,39 @@ def fetch_holidays(year: int) -> list:
     return sorted((d.isoformat(), name) for d, name in kr_holidays.items())
 
 
-def date_already_exists(date_str: str) -> bool:
-    """해당 날짜에 '공휴일' 체크박스가 켜진 페이지가 이미 있는지 확인한다.
+def existing_holiday_dates(year: int) -> set:
+    """그 해에 이미 등록된 공휴일 페이지들의 날짜 집합.
 
-    (단순히 그 날짜에 다른 일정/할일이 있다는 이유로 건너뛰지 않도록,
-    공휴일 여부까지 필터링한다.)
+    공휴일마다 한 번씩(연 15~20회) 물어보던 것을 한 해 범위 한 번으로 줄였다.
+    '공휴일' 체크박스까지 걸러서, 단순히 그 날짜에 다른 일정/할일이 있다는
+    이유로 건너뛰는 일은 없게 한다.
+
+    날짜 범위는 앞뒤로 하루씩 넉넉히 잡고 원본 문자열로 다시 거른다 —
+    노션 date 필터가 UTC로 비교해서 한국 오전 시각이 하루 밀리기 때문이다
+    (notify.py / worker의 queryRange와 같은 이유, 같은 방식).
     """
     url = f"{NOTION_API}/databases/{SCHEDULE_DB_ID}/query"
     payload = {
         "filter": {
             "and": [
-                {"property": "날짜", "date": {"equals": date_str}},
+                {"property": "날짜", "date": {"on_or_after": f"{year - 1}-12-31"}},
+                {"property": "날짜", "date": {"before": f"{year + 1}-01-02"}},
                 {"property": "공휴일", "checkbox": {"equals": True}},
             ]
         }
     }
-    resp = requests.post(url, headers=HEADERS, json=payload, timeout=HTTP_TIMEOUT)
-    resp.raise_for_status()
-    return len(resp.json().get("results", [])) > 0
+    dates = set()
+    while True:
+        resp = requests.post(url, headers=HEADERS, json=payload, timeout=HTTP_TIMEOUT)
+        resp.raise_for_status()
+        data = resp.json()
+        for p in data.get("results", []):
+            start = ((p.get("properties", {}).get("날짜") or {}).get("date") or {}).get("start") or ""
+            if start[:4] == str(year):
+                dates.add(start[:10])
+        if not data.get("has_more"):
+            return dates
+        payload["start_cursor"] = data["next_cursor"]
 
 
 def create_holiday_page(date_str: str, name: str) -> None:
@@ -81,10 +96,12 @@ def create_holiday_page(date_str: str, name: str) -> None:
 def main():
     year = datetime.now(KST).year
     holiday_list = fetch_holidays(year)
+    already = existing_holiday_dates(year)  # 조회는 한 번이면 된다
     added = 0
     for date_str, name in holiday_list:
-        if not date_already_exists(date_str):
+        if date_str not in already:
             create_holiday_page(date_str, name)
+            already.add(date_str)  # 같은 날 공휴일이 둘이어도 한 번만 만든다
             added += 1
             print(f"추가됨: {date_str} {name}")
     print(f"완료. 총 {len(holiday_list)}개 중 {added}개 신규 추가.")

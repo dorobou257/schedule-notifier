@@ -831,11 +831,13 @@ function notionRow(item, sectionType) {
     // 체크해도 목록에서 지우지 않는다 — 지워버리면 잘못 눌렀을 때 되돌릴
     // 방법이 없다. 체크된 채로 남겨두고 다시 누르면 노션에서도 해제된다.
     const box = el("input", { type: "checkbox", className: "row-check", checked: !!item.done });
-    box.addEventListener("change", async () => {
+    box.addEventListener("change", () => {
       const next = box.checked;
-      box.disabled = true;
       li.classList.toggle("is-checked", next);
-      await setItemDone(item, next);
+      // 노션 반영을 기다리지 않는다. setItemDone은 item.done을 먼저 바꾸고
+      // 실패하면 큐에 쌓아 다음에 열 때 다시 보내므로, 여기서 await하면
+      // 느린 회선에서 체크박스만 잠긴 채 몇 초씩 멈춰 있게 된다.
+      setItemDone(item, next);
       renderMain(new Date());
     });
     li.appendChild(box);

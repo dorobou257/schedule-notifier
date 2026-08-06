@@ -38,13 +38,20 @@ function stubFetch(handler) {
 
 const jsonRes = (body, status = 200) => new Response(JSON.stringify(body), { status });
 
-/** 조회 범위 필터에서 대상 날짜를 되짚어 그 날짜의 페이지를 만들어준다.
- *  워커가 범위로 물어보고 원본 날짜로 거르므로, mock도 날짜를 맞춰줘야 한다. */
-function pageMatchingQuery(id, body) {
-  const from = body.filter.and[0].date.on_or_after;
-  const d = new Date(from + "T00:00:00Z");
-  d.setUTCDate(d.getUTCDate() + 1); // on_or_after는 대상 날짜 하루 전
-  return page(id, { 날짜: dateProp(d.toISOString().slice(0, 10)) });
+/** 오늘(KST) 기준 며칠 뒤/전의 YYYY-MM-DD. PATCH 허용 창을 테스트할 때 쓴다. */
+function kstDay(offset = 0) {
+  const d = new Date(Date.now() + 9 * 60 * 60 * 1000 + offset * 86400000);
+  return d.toISOString().slice(0, 10);
+}
+
+/** GET /v1/pages/{id} 응답. isOwnPage가 부모 DB와 날짜를 여기서 읽는다. */
+function pageDetail(id, databaseId, dateStr) {
+  return {
+    object: "page",
+    id,
+    parent: { type: "database_id", database_id: databaseId },
+    properties: { 날짜: dateProp(dateStr) },
+  };
 }
 
 test("GET /today: 노션 페이지를 today.json과 같은 형태로 바꾼다", async () => {
@@ -103,10 +110,8 @@ test("GET /today: 날짜 형식이 잘못되면 400", async () => {
 
 test("PATCH /item: 우리 DB의 페이지면 완료 체크박스를 바꾼다", async () => {
   const stub = stubFetch((url, init) => {
-    if (url.includes("/query")) {
-      return jsonRes({ results: [pageMatchingQuery("p2", JSON.parse(init.body))], has_more: false });
-    }
-    return jsonRes({ object: "page" });
+    if (init.method === "PATCH") return jsonRes({ object: "page" });
+    return jsonRes(pageDetail("p2", "db-schedule", kstDay(0)));
   });
   try {
     const res = await worker.fetch(
@@ -119,18 +124,68 @@ test("PATCH /item: 우리 DB의 페이지면 완료 체크박스를 바꾼다", 
     const patch = stub.calls.find((c) => c.method === "PATCH");
     assert.equal(patch.url, "https://api.notion.com/v1/pages/p2");
     assert.deepEqual(patch.body, { properties: { 완료: { checkbox: true } } });
+
+    // 검증에 쓰는 조회는 딱 한 번이어야 한다(예전엔 ±3일 × DB 2개 = 14번이었다).
+    assert.equal(stub.calls.filter((c) => c.method === "GET").length, 1);
+    assert.equal(stub.calls.filter((c) => c.url.includes("/query")).length, 0, "DB 전수조회는 더 이상 하지 않는다");
+  } finally {
+    stub.restore();
+  }
+});
+
+test("PATCH /item: 소설 DB 페이지도 허용하고, id 하이픈 유무는 상관없다", async () => {
+  const stub = stubFetch((url, init) => {
+    if (init.method === "PATCH") return jsonRes({ object: "page" });
+    // 노션은 부모 id를 하이픈 붙은 형태로 준다. 환경변수는 하이픈이 없을 수 있다.
+    return jsonRes(pageDetail("n1", "db-nov-el", kstDay(0)));
+  });
+  const env = { ...ENV, NOVEL_DB_ID: "DBNOVEL" };
+  try {
+    const res = await worker.fetch(
+      new Request("https://w.dev/item", { method: "PATCH", body: JSON.stringify({ id: "n1", done: false }) }),
+      env
+    );
+    assert.equal(res.status, 200);
   } finally {
     stub.restore();
   }
 });
 
 test("PATCH /item: 우리 DB에 없는 페이지는 403이고 노션을 수정하지 않는다", async () => {
-  const stub = stubFetch((url, init) =>
-    jsonRes({ results: [pageMatchingQuery("other", JSON.parse(init.body))], has_more: false })
-  );
+  const stub = stubFetch(() => jsonRes(pageDetail("남의페이지", "db-남의것", kstDay(0))));
   try {
     const res = await worker.fetch(
       new Request("https://w.dev/item", { method: "PATCH", body: JSON.stringify({ id: "남의페이지", done: true }) }),
+      ENV
+    );
+    assert.equal(res.status, 403);
+    assert.equal(stub.calls.some((c) => c.method === "PATCH"), false);
+  } finally {
+    stub.restore();
+  }
+});
+
+test("PATCH /item: 우리 DB라도 허용 창(±3일) 밖 날짜는 403", async () => {
+  for (const offset of [-4, 4]) {
+    const stub = stubFetch(() => jsonRes(pageDetail("old", "db-schedule", kstDay(offset))));
+    try {
+      const res = await worker.fetch(
+        new Request("https://w.dev/item", { method: "PATCH", body: JSON.stringify({ id: "old", done: true }) }),
+        ENV
+      );
+      assert.equal(res.status, 403, `offset=${offset}`);
+      assert.equal(stub.calls.some((c) => c.method === "PATCH"), false);
+    } finally {
+      stub.restore();
+    }
+  }
+});
+
+test("PATCH /item: 노션이 페이지를 못 찾으면(404) 403으로 막는다", async () => {
+  const stub = stubFetch(() => new Response("not found", { status: 404 }));
+  try {
+    const res = await worker.fetch(
+      new Request("https://w.dev/item", { method: "PATCH", body: JSON.stringify({ id: "없는id", done: true }) }),
       ENV
     );
     assert.equal(res.status, 403);
@@ -151,6 +206,74 @@ test("PATCH /item: id나 done이 빠지면 400", async () => {
   } finally {
     stub.restore();
   }
+});
+
+test("GET /week: 7일치를 DB당 한 번의 조회로 받아 날짜별로 나눈다", async () => {
+  const schedulePages = [
+    page("a", { 이름: title("월요일 할일"), 종류: select("할일"), 날짜: dateProp("2026-08-03") }),
+    page("b", { 이름: title("수요일 병원"), 종류: select("일정"), 날짜: dateProp("2026-08-05T09:00:00+09:00") }),
+    page("c", { 이름: title("다음주"), 종류: select("할일"), 날짜: dateProp("2026-08-10") }), // 범위 밖
+  ];
+  const novelPages = [page("n", { 이름: title("50화"), 작품: select("챌린지"), 유형: select("초고"), 날짜: dateProp("2026-08-05") })];
+
+  const stub = stubFetch((url) => {
+    const dbId = url.match(/databases\/([^/]+)\/query/)[1];
+    return jsonRes({ results: dbId === "db-schedule" ? schedulePages : novelPages, has_more: false });
+  });
+  try {
+    const res = await worker.fetch(new Request("https://w.dev/week?start=2026-08-03"), ENV);
+    assert.equal(res.status, 200);
+    const data = await res.json();
+
+    assert.equal(data.start, "2026-08-03");
+    assert.equal(data.end, "2026-08-09");
+    assert.deepEqual(Object.keys(data.days), [
+      "2026-08-03", "2026-08-04", "2026-08-05", "2026-08-06",
+      "2026-08-07", "2026-08-08", "2026-08-09",
+    ]);
+
+    assert.deepEqual(data.days["2026-08-03"].todo_items.map((i) => i.text), ["월요일 할일"]);
+    assert.equal(data.days["2026-08-03"].weekday, "월요일");
+    assert.deepEqual(data.days["2026-08-05"].special_items.map((i) => i.text), ["수요일 병원"]);
+    assert.deepEqual(data.days["2026-08-05"].novel_items.map((i) => i.text), ["50화"]);
+    assert.deepEqual(data.days["2026-08-04"].todo_items, [], "항목 없는 날도 빈 채로 들어있다");
+
+    // 범위 밖(8/10)은 어느 날에도 섞이면 안 된다.
+    const allTexts = Object.values(data.days).flatMap((d) => d.todo_items.map((i) => i.text));
+    assert.equal(allTexts.includes("다음주"), false);
+
+    // 핵심: 하루씩 7번(=14회)이 아니라 DB당 1번씩 총 2번만 조회한다.
+    assert.equal(stub.calls.length, 2);
+    assert.deepEqual(stub.calls[0].body.filter, {
+      and: [
+        { property: "날짜", date: { on_or_after: "2026-08-02" } },
+        { property: "날짜", date: { before: "2026-08-11" } },
+      ],
+    });
+  } finally {
+    stub.restore();
+  }
+});
+
+test("GET /week: start가 없으면 오늘부터, 형식이 틀리면 400", async () => {
+  const stub = stubFetch(() => jsonRes({ results: [], has_more: false }));
+  try {
+    const bad = await worker.fetch(new Request("https://w.dev/week?start=이번주"), ENV);
+    assert.equal(bad.status, 400);
+    assert.equal(stub.calls.length, 0);
+
+    const ok = await worker.fetch(new Request("https://w.dev/week"), ENV);
+    assert.equal(ok.status, 200);
+    assert.equal((await ok.json()).start, kstDay(0));
+  } finally {
+    stub.restore();
+  }
+});
+
+test("GET /diag는 더 이상 없다(DB id를 아무에게나 알려주지 않는다)", async () => {
+  const res = await worker.fetch(new Request("https://w.dev/diag"), ENV);
+  assert.equal(res.status, 404);
+  assert.equal((await res.text()).includes("db-schedule"), false);
 });
 
 test("OPTIONS 프리플라이트와 알 수 없는 경로", async () => {
