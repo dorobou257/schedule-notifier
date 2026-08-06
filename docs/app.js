@@ -827,14 +827,17 @@ function updateNowCard() {
   // 드래그로 순서를 바꾸는 중이라면 화면을 갈아끼우면 안 된다 — 잡고 있던
   // 요소가 통째로 사라져 드래그가 끊긴다. 다음 틱에서 따라잡는다.
   if (isDragging()) return;
-  if (!state.nowCardEls) {
-    // 블록 경계를 넘었을 수 있으니(예: 다음 블록으로 진입) 전체를 다시 그린다.
-    renderMain(new Date());
-    return;
-  }
   const now = new Date();
   const dayBoundaryHour = store.settings.dayBoundaryHour;
   const nowMinutes = dateToBoundaryMinutes(now, dayBoundaryHour);
+
+  if (!state.nowCardEls) {
+    // 지금 진행 중인 블록이 없는 시간대(기상 전·취침 후)다. 화면에 바뀔 게
+    // 없으므로 실제로 어떤 블록에 들어섰을 때만 다시 그린다 — 예전엔 이 시간대
+    // 내내 1분마다 전체 DOM을 새로 만들고 소설 배정까지 다시 계산했다.
+    if (findCurrentIndex(state.computed.blocks, nowMinutes) !== -1) renderMain(now);
+    return;
+  }
   const b = state.computed.blocks[state.nowCardEls.blockIndex];
   if (!b || nowMinutes < b.start || nowMinutes >= b.end) {
     renderMain(now); // 블록이 바뀌었다 — 이번만 다시 그린다.
@@ -944,25 +947,56 @@ function openBedTimeSheet() {
 // 시트 공통 (제안 / 아침 보정 / 편집 / 설정)
 // ---------------------------------------------------------------
 
+// 시트가 열려 있는 동안만 문서에 붙여두는 키 처리기(Esc 닫기 + 포커스 가두기).
+let sheetKeyHandler = null;
+// 시트를 열기 직전에 포커스가 있던 자리. 닫을 때 여기로 돌려준다.
+let focusBeforeSheet = null;
+
+function focusablesIn(el) {
+  return Array.from(
+    el.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')
+  ).filter((n) => !n.disabled && n.offsetParent !== null);
+}
+
 function closeSheet() {
   const root = document.getElementById("sheet-root");
   root.innerHTML = "";
+  if (sheetKeyHandler) {
+    document.removeEventListener("keydown", sheetKeyHandler, true);
+    sheetKeyHandler = null;
+  }
   // 제안 시트를 닫았다는 건 "오늘은 됐다"는 뜻이다. 이걸 남기지 않으면 적용하지
   // 않고 바깥을 탭해 닫을 때마다 다음 renderShell에서 같은 시트가 다시 올라온다.
   if (state.activeSheet === "proposal") state.proposalDismissed = true;
   state.activeSheet = null;
+  if (focusBeforeSheet && document.contains(focusBeforeSheet)) focusBeforeSheet.focus();
+  focusBeforeSheet = null;
 }
+
+let sheetSeq = 0;
 
 function openSheet(title, subtitle, bodyChildren, actions) {
   const root = document.getElementById("sheet-root");
+  // 제안 시트는 항목을 토글할 때마다 자기 자신을 다시 그린다. 그때 포커스를
+  // 새로 뺏어오면 방금 누른 체크박스에서 초점이 튕겨나가므로, "이미 열려 있던
+  // 시트를 갈아끼우는 중"인지 기억해 둔다.
+  const replacing = root.childElementCount > 0;
+  if (!replacing) focusBeforeSheet = document.activeElement;
   root.innerHTML = "";
+
   const overlay = el("div", { className: "sheet-overlay" });
   overlay.addEventListener("click", (e) => {
     if (e.target === overlay) closeSheet();
   });
-  const sheet = el("div", { className: "sheet" });
+
+  const titleId = `sheet-title-${++sheetSeq}`;
+  const sheet = el("div", { className: "sheet", tabIndex: -1 });
+  sheet.setAttribute("role", "dialog");
+  sheet.setAttribute("aria-modal", "true");
+  sheet.setAttribute("aria-labelledby", titleId);
+
   sheet.appendChild(el("div", { className: "sheet__handle" }));
-  sheet.appendChild(el("h2", { className: "sheet__title", textContent: title }));
+  sheet.appendChild(el("h2", { className: "sheet__title", id: titleId, textContent: title }));
   if (subtitle) sheet.appendChild(el("p", { className: "sheet__subtitle", textContent: subtitle }));
   const body = el("div", { className: "sheet__body" });
   bodyChildren.forEach((c) => body.appendChild(c));
@@ -974,6 +1008,42 @@ function openSheet(title, subtitle, bodyChildren, actions) {
   }
   overlay.appendChild(sheet);
   root.appendChild(overlay);
+
+  // 시트 자체에 포커스를 준다. 첫 입력칸으로 보내면 휴대폰에서 키보드가 튀어
+  // 올라와 시트 절반이 가려지므로, 읽는 것부터 하게 둔다.
+  if (!replacing) sheet.focus({ preventScroll: true });
+
+  if (sheetKeyHandler) document.removeEventListener("keydown", sheetKeyHandler, true);
+  sheetKeyHandler = (e) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      closeSheet();
+      return;
+    }
+    if (e.key !== "Tab") return;
+    // 시트 밖으로 탭이 새어나가면 뒤에 깔린 화면을 더듬게 된다 — 안에서 순환시킨다.
+    const items = focusablesIn(sheet);
+    if (!items.length) {
+      e.preventDefault();
+      sheet.focus({ preventScroll: true });
+      return;
+    }
+    const first = items[0];
+    const last = items[items.length - 1];
+    const active = document.activeElement;
+    if (!sheet.contains(active)) {
+      e.preventDefault();
+      (e.shiftKey ? last : first).focus();
+    } else if (e.shiftKey && active === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && active === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  };
+  document.addEventListener("keydown", sheetKeyHandler, true);
+
   return { overlay, sheet, body };
 }
 
@@ -1011,16 +1081,19 @@ function openProposalSheet() {
   const overrides = new Set(store.today.protectedOverrides || []);
   render();
 
-  function render() {
+  // 항목을 토글하면 시트를 통째로 다시 그린다(계산 결과가 바뀌므로). 그때
+  // 방금 누른 체크박스가 사라지면서 포커스가 body로 떨어지므로, 같은 항목의
+  // 체크박스로 되돌려준다 — 키보드로 여러 개를 연달아 끄고 켤 수 있어야 한다.
+  function render(refocusId) {
     const { result } = computeForToday(new Date(), overrides);
     const rows = result.adjustments.map((adj) => {
-      const row = el("div", { className: "proposal-row" });
+      const row = el("div", { className: "proposal-row", dataset: { id: adj.id } });
       const checkbox = el("input", { type: "checkbox" });
       checkbox.checked = !overrides.has(adj.id);
       checkbox.addEventListener("change", () => {
         if (checkbox.checked) overrides.delete(adj.id);
         else overrides.add(adj.id);
-        render();
+        render(adj.id);
       });
       row.appendChild(checkbox);
       const label = adj.type === "removed" ? `${adj.name} 삭제` : `${adj.name} ${formatDuration(adj.before)} → ${formatDuration(adj.after)}`;
@@ -1058,12 +1131,18 @@ function openProposalSheet() {
     });
 
     const wakeMinutes = getWakeMinutes(store.settings.dayBoundaryHour, new Date());
-    openSheet(
+    const { sheet } = openSheet(
       `${boundaryMinutesToHHMM(wakeMinutes, store.settings.dayBoundaryHour)} 기상`,
       "오늘 일정을 이렇게 조정할까요? 항목을 체크 해제하면 그 블록은 그대로 유지됩니다.",
       [...rows, summary],
       [editBtn, applyBtn]
     );
+    if (refocusId) {
+      // 방금 토글한 항목이 이번 계산에서 빠졌을 수도 있다(체크 해제하면 그 블록은
+      // 더 이상 줄어들지 않으므로). 그럴 땐 시트 자체로 물러난다.
+      const box = sheet.querySelector(`.proposal-row[data-id="${CSS.escape(refocusId)}"] input`);
+      (box || sheet).focus({ preventScroll: true });
+    }
   }
 }
 

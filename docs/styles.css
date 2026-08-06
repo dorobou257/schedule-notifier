@@ -303,6 +303,11 @@ button.sleep-btn.is-active{ background:var(--accent-ink); }
   padding:10px 20px calc(20px + env(safe-area-inset-bottom));
   animation:slide-up .25s ease;
 }
+/* 시트를 열면 컨테이너 자체에 포커스가 간다(스크린리더가 제목부터 읽도록).
+   마우스로 열었을 때 테두리만 덩그러니 뜨는 건 어색해서 지운다 — 안쪽
+   버튼·입력칸의 기본 포커스 표시는 그대로 남는다. */
+.sheet:focus{ outline:none; }
+.sheet:focus-visible{ outline:2px solid var(--accent-ink); outline-offset:-4px; }
 @media (prefers-reduced-motion: reduce){ .sheet-overlay{ animation:none; } .sheet{ animation:none; } }
 @keyframes slide-up{ from{ transform:translateY(24px); opacity:.4; } }
 .sheet__handle{ width:36px; height:4px; border-radius:99px; background:var(--rule); margin:4px auto 14px; }
