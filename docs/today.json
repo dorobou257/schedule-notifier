@@ -1,28 +1,77 @@
 {
-  "date": "2026-08-07",
-  "weekday": "금요일",
+  "date": "2026-08-08",
+  "weekday": "토요일",
   "holiday_names": [],
   "special_items": [],
-  "todo_items": [],
+  "todo_items": [
+    {
+      "id": "3b525ba2-c8ef-81de-821c-e476d07f7149",
+      "time": "",
+      "tags": [
+        "할일"
+      ],
+      "text": "속성무시",
+      "done": false
+    },
+    {
+      "id": "3b525ba2-c8ef-8171-ac93-fc4d3f50d25f",
+      "time": "21:30",
+      "tags": [
+        "할일"
+      ],
+      "text": "[연동 확인용] 지워도 됩니다",
+      "done": true
+    }
+  ],
   "novel_items": [
     {
-      "id": "37e25ba2-c8ef-80f4-ad6e-e31481456816",
+      "id": "3b525ba2-c8ef-817b-9531-c6f3db5aea23",
       "time": "",
       "tags": [
         "챌린지",
         "초고"
       ],
-      "text": "51화",
+      "text": "[연동 확인용] 지워도 됩니다",
       "done": false
     },
     {
-      "id": "37e25ba2-c8ef-8097-9f62-cd0993831bf9",
+      "id": "3a925ba2-c8ef-8072-8375-fd9cb097caf5",
+      "time": "",
+      "tags": [
+        "시한부 북부대공의 호위기사가 되었다",
+        "트리트먼트"
+      ],
+      "text": "EP 5",
+      "done": false
+    },
+    {
+      "id": "3a925ba2-c8ef-80ac-a5c1-da23ea0e701a",
+      "time": "",
+      "tags": [
+        "시한부 북부대공의 호위기사가 되었다",
+        "트리트먼트"
+      ],
+      "text": "EP 4",
+      "done": false
+    },
+    {
+      "id": "37e25ba2-c8ef-8093-be6a-d3ba37448c75",
+      "time": "",
+      "tags": [
+        "챌린지",
+        "초고"
+      ],
+      "text": "52화",
+      "done": false
+    },
+    {
+      "id": "37e25ba2-c8ef-8055-b72f-cee2adf559bb",
       "time": "",
       "tags": [
         "챌린지",
         "연재"
       ],
-      "text": "51화",
+      "text": "52화",
       "done": false
     }
   ],
