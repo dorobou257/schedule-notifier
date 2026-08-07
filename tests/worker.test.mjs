@@ -270,6 +270,161 @@ test("GET /week: start가 없으면 오늘부터, 형식이 틀리면 400", asyn
   }
 });
 
+// --- POST /item : 앱에서 만든 항목을 노션에 남긴다 --------------------------
+//
+// 인증이 없는 공개 엔드포인트다. 그래서 "무엇을 만들 수 있는가"의 경계가 곧
+// 보안 경계다 — 여기 테스트는 그 경계를 못 박는 것이 목적이다.
+
+const post = (body) =>
+  worker.fetch(
+    new Request("https://w.dev/item", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
+    ENV
+  );
+
+test("POST /item: 할일을 만들고 목록에 꽂을 수 있는 모양으로 돌려준다", async () => {
+  const created = page("new1", { 이름: title("장보기"), 종류: select("할일"), 완료: checkbox(false), 날짜: dateProp(kstDay(0)) });
+  const stub = stubFetch(() => jsonRes(created));
+  try {
+    const res = await post({ db: "schedule", date: kstDay(0), name: "장보기", kind: "할일" });
+    assert.equal(res.status, 200);
+    const data = await res.json();
+    assert.equal(data.list, "todo_items");
+    assert.deepEqual(data.item, { id: "new1", time: "", tags: ["할일"], text: "장보기", done: false });
+
+    assert.equal(stub.calls.length, 1);
+    assert.match(stub.calls[0].url, /\/v1\/pages$/);
+    assert.equal(stub.calls[0].method, "POST");
+    assert.equal(stub.calls[0].body.parent.database_id, "db-schedule", "DB id는 서버가 정한다");
+    assert.deepEqual(Object.keys(stub.calls[0].body.properties).sort(), ["날짜", "이름", "종류"]);
+  } finally {
+    stub.restore();
+  }
+});
+
+test("POST /item: 종류가 '일정'이면 특별 일정 자리로 간다", async () => {
+  const created = page("new2", { 이름: title("병원"), 종류: select("일정"), 날짜: dateProp(`${kstDay(0)}T14:30:00+09:00`) });
+  const stub = stubFetch(() => jsonRes(created));
+  try {
+    const data = await (await post({ db: "schedule", date: kstDay(0), name: "병원", kind: "일정", time: "14:30" })).json();
+    assert.equal(data.list, "special_items");
+    assert.equal(data.item.time, "14:30");
+    // 시각을 붙일 땐 KST 오프셋이 명시돼야 노션이 아홉 시간 밀지 않는다.
+    assert.equal(stub.calls[0].body.properties.날짜.date.start, `${kstDay(0)}T14:30:00+09:00`);
+  } finally {
+    stub.restore();
+  }
+});
+
+test("POST /item: 소설 일정은 작품과 유형이 함께 붙는다", async () => {
+  const created = page("new3", { 이름: title("3화 초고"), 작품: select("챌린지"), 유형: select("초고"), 완료: checkbox(false), 날짜: dateProp(kstDay(1)) });
+  const stub = stubFetch(() => jsonRes(created));
+  try {
+    const data = await (await post({ db: "novel", date: kstDay(1), name: "3화 초고", kind: "초고", work: "챌린지" })).json();
+    assert.equal(data.list, "novel_items");
+    assert.deepEqual(data.item.tags, ["챌린지", "초고"]);
+    assert.equal(stub.calls[0].body.parent.database_id, "db-novel");
+    assert.deepEqual(stub.calls[0].body.properties.유형, { select: { name: "초고" } });
+    assert.deepEqual(stub.calls[0].body.properties.작품, { select: { name: "챌린지" } });
+  } finally {
+    stub.restore();
+  }
+});
+
+test("POST /item: 허용 목록 밖의 종류·유형은 400", async () => {
+  const stub = stubFetch(() => jsonRes({}));
+  try {
+    for (const body of [
+      { db: "schedule", date: kstDay(0), name: "x", kind: "공휴일" },
+      { db: "schedule", date: kstDay(0), name: "x", kind: "초고" }, // 소설 DB의 유형
+      { db: "novel", date: kstDay(0), name: "x", kind: "할일" },
+      { db: "novel", date: kstDay(0), name: "x", kind: "" },
+    ]) {
+      const res = await post(body);
+      assert.equal(res.status, 400, JSON.stringify(body));
+    }
+    assert.equal(stub.calls.length, 0, "노션을 부르지도 않아야 한다");
+  } finally {
+    stub.restore();
+  }
+});
+
+test("POST /item: 허용 창(±3일) 밖의 날짜는 403", async () => {
+  const stub = stubFetch(() => jsonRes({}));
+  try {
+    for (const d of [kstDay(4), kstDay(-4), "2030-01-01"]) {
+      const res = await post({ db: "schedule", date: d, name: "x", kind: "할일" });
+      assert.equal(res.status, 403, d);
+    }
+    assert.equal((await post({ db: "schedule", date: "오늘", name: "x", kind: "할일" })).status, 400);
+    assert.equal(stub.calls.length, 0);
+  } finally {
+    stub.restore();
+  }
+});
+
+test("POST /item: db 이름을 위조해도 다른 DB에는 못 쓴다", async () => {
+  const stub = stubFetch(() => jsonRes({}));
+  try {
+    for (const db of ["db-schedule", "남의DB", "", null, { database_id: "x" }]) {
+      const res = await post({ db, date: kstDay(0), name: "x", kind: "할일" });
+      assert.equal(res.status, 400, String(db));
+    }
+    assert.equal(stub.calls.length, 0);
+  } finally {
+    stub.restore();
+  }
+});
+
+test("POST /item: 이름이 비었거나 너무 길면 400", async () => {
+  const stub = stubFetch(() => jsonRes({}));
+  try {
+    assert.equal((await post({ db: "schedule", date: kstDay(0), name: "   ", kind: "할일" })).status, 400);
+    assert.equal((await post({ db: "schedule", date: kstDay(0), name: "가".repeat(201), kind: "할일" })).status, 400);
+    assert.equal((await post({ db: "novel", date: kstDay(0), name: "x", kind: "초고", work: "가".repeat(201) })).status, 400);
+    assert.equal(stub.calls.length, 0);
+  } finally {
+    stub.restore();
+  }
+});
+
+test("POST /item: 임의의 속성은 통째로 무시한다 — 공휴일은 만들 수 없다", async () => {
+  const created = page("new4", { 이름: title("x"), 종류: select("할일"), 날짜: dateProp(kstDay(0)) });
+  const stub = stubFetch(() => jsonRes(created));
+  try {
+    await post({
+      db: "schedule",
+      date: kstDay(0),
+      name: "x",
+      kind: "할일",
+      properties: { 공휴일: { checkbox: true } },
+      공휴일: true,
+      완료: true,
+      parent: { database_id: "남의DB" },
+    });
+    const sent = stub.calls[0].body;
+    assert.equal(sent.parent.database_id, "db-schedule");
+    assert.deepEqual(Object.keys(sent.properties).sort(), ["날짜", "이름", "종류"]);
+  } finally {
+    stub.restore();
+  }
+});
+
+test("POST /item: 본문이 JSON이 아니거나 노션이 실패하면 각각 400·502", async () => {
+  const bad = await worker.fetch(
+    new Request("https://w.dev/item", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{" }),
+    ENV
+  );
+  assert.equal(bad.status, 400);
+
+  const stub = stubFetch(() => new Response("nope", { status: 400 }));
+  try {
+    const res = await post({ db: "schedule", date: kstDay(0), name: "x", kind: "할일" });
+    assert.equal(res.status, 502, "노션 쪽 실패는 502로 감싼다");
+  } finally {
+    stub.restore();
+  }
+});
+
 test("GET /diag는 더 이상 없다(DB id를 아무에게나 알려주지 않는다)", async () => {
   const res = await worker.fetch(new Request("https://w.dev/diag"), ENV);
   assert.equal(res.status, 404);
@@ -279,7 +434,7 @@ test("GET /diag는 더 이상 없다(DB id를 아무에게나 알려주지 않�
 test("OPTIONS 프리플라이트와 알 수 없는 경로", async () => {
   const opt = await worker.fetch(new Request("https://w.dev/item", { method: "OPTIONS" }), ENV);
   assert.equal(opt.status, 204);
-  assert.equal(opt.headers.get("Access-Control-Allow-Methods"), "GET, PATCH, OPTIONS");
+  assert.equal(opt.headers.get("Access-Control-Allow-Methods"), "GET, POST, PATCH, OPTIONS");
 
   const nf = await worker.fetch(new Request("https://w.dev/nope"), ENV);
   assert.equal(nf.status, 404);

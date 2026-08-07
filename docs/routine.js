@@ -7,13 +7,9 @@
 
 export const DEFAULT_SETTINGS = {
   baseWake: "08:00",
-  baseSleep: "00:30",
-  sleepTargetMinutes: 450, // 7.5시간
+  baseSleep: "00:00",
+  sleepTargetMinutes: 480, // 8시간
   dayBoundaryHour: 4,
-  dropBreakfastWhenLate: true,
-  // 학기 중에만 쓰는 식사 시각("HH:MM"). 비워두면 평소 시각 그대로다.
-  // 복학하면 점심이 13:00 강의와 부딪히는데, 방학에도 12:00에 먹을 이유는 없다.
-  semesterMeals: { breakfast: "", lunch: "", dinner: "" },
   // 부족한 시간을 회수할 때의 순서. 앞에 있을수록 먼저 줄어든다.
   // 설정 화면에서 사용자가 이 배열 순서를 바꿀 수 있다.
   reducePriority: ["여유", "운동", "작업", "집필"],
@@ -67,29 +63,74 @@ export function logicalDateKey(date, dayBoundaryHour = 4) {
   return `${y}-${m}-${day}`;
 }
 
-// 평일/주말 구분을 폐기한 단일 기본 루틴. 합계는 정확히 기준 예산(기상
-// 08:00~취침 00:30 = 990분)과 일치한다 — 08:00 기상 시 결과가 이 표와
-// 그대로 같아야 한다(회귀 테스트로 고정).
+// 요일 목록. 월=0 … 일=6 (logicalWeekday / notify.py와 같은 규칙).
+/** 목요일은 집필도 작업도 하지 않는 휴일이다 — 방학에도 학기에도 같다. */
+export const EXCEPT_THU = [0, 1, 2, 4, 5, 6];
+/** 운동은 월·수·금. */
+export const MON_WED_FRI = [0, 2, 4];
+
+// 방학 기본 루틴. 합계는 정확히 기준 예산(기상 08:00~취침 00:00 = 960분)과
+// 일치한다 — 08:00 기상 시 결과가 계획한 표와 그대로 같아야 한다
+// (회귀 테스트로 고정).
+//
+// 시각 고정 앵커 넷(점심 12:00 · 저녁 18:00 · 운동 21:00 · 취침 00:00)이 하루의
+// 골격이다. 저녁과 운동까지 시각으로 못 박은 이유: 유동으로 두면 강의가 있는
+// 날마다 엉뚱한 시각으로 떠밀린다(저녁이 15시로 앞당겨지는 식). 고정해두면
+// 방학과 학기가 같은 골격을 쓰고, 22시 이후는 어느 날이든 휴식으로 남는다.
 //
 // anchor:
 //   "wake"  하루의 시작점. 실제/예상 기상 시각이 곧 이 블록의 시각.
 //   "clock" 이 블록은 앞뒤 블록과 무관하게 항상 fixedAt 시각에 시작한다.
-//           (점심 13:00 고정 — 오전 지연의 손실이 이 지점에서 흡수되도록 하는 핵심 앵커)
 //   "sleep" 하루의 끝점. 취침은 절대 밀리지 않는다(요구사항).
 //   없음    유동 블록. 같은 구간(segment) 안에서 순서대로 이어 붙는다.
+//
+// prep: 기상 직후의 준비 시간. 여기엔 집필·작업을 넣지 않는다(placement.js).
+//   protected로 두지 않는 이유는 늦잠 대응 때문이다 — minMinutes 60이라
+//   평상시엔 한 시간이 그대로 지켜지고, 정말 시간이 모자랄 때만 마지막
+//   수단으로 줄어든다.
 export const BASE_BLOCKS = [
   { id: "wake", name: "기상", category: "기타", minutes: 0, anchor: "wake", protected: true },
-  { id: "breakfast", name: "아침 식사", category: "식사", minutes: 60, minMinutes: 60, protected: true },
-  { id: "session1", name: "1차 집필", category: "집필", minutes: 120, minMinutes: 60 },
-  { id: "buffer", name: "여유", category: "여유", minutes: 120, minMinutes: 0 },
-  { id: "lunch", name: "점심 식사", category: "식사", minutes: 60, minMinutes: 60, protected: true, anchor: "clock", fixedAt: hhmmToBoundaryMinutes("13:00") },
-  { id: "session2", name: "2차 집필", category: "집필", minutes: 120, minMinutes: 60 },
-  { id: "work", name: "작업", category: "작업", minutes: 120, minMinutes: 30 },
-  { id: "dinner", name: "저녁 식사", category: "식사", minutes: 60, minMinutes: 60, protected: true },
-  { id: "session3", name: "3차 집필", category: "집필", minutes: 120, minMinutes: 60 },
-  { id: "exercise", name: "운동", category: "운동", minutes: 60, minMinutes: 30, days: [0, 2, 4] },
-  { id: "rest", name: "휴식", category: "여유", minutes: 150, minMinutes: 0 },
-  { id: "sleep", name: "취침", category: "기타", minutes: 0, protected: true, anchor: "sleep", fixedAt: hhmmToBoundaryMinutes("00:30") },
+  { id: "morning", name: "준비 여유", category: "여유", minutes: 60, minMinutes: 60, prep: true },
+  { id: "session1", name: "1차 집필", category: "집필", minutes: 120, minMinutes: 60, days: EXCEPT_THU },
+  { id: "buffer1", name: "여유", category: "여유", minutes: 60, minMinutes: 0 },
+  { id: "lunch", name: "점심 식사", category: "식사", minutes: 60, minMinutes: 60, protected: true, anchor: "clock", fixedAt: hhmmToBoundaryMinutes("12:00") },
+  { id: "session2", name: "2차 집필", category: "집필", minutes: 120, minMinutes: 60, days: EXCEPT_THU },
+  { id: "work", name: "작업", category: "작업", minutes: 120, minMinutes: 30, days: EXCEPT_THU },
+  { id: "buffer2", name: "오후 여유", category: "여유", minutes: 60, minMinutes: 0 },
+  { id: "dinner", name: "저녁 식사", category: "식사", minutes: 60, minMinutes: 60, protected: true, anchor: "clock", fixedAt: hhmmToBoundaryMinutes("18:00") },
+  // 3차 집필이 저녁~운동 사이를 채우므로 휴식 둘은 운동 뒤에 온다. 배열 순서만으로도
+  // (배치 없이 computeSchedule만 돌려도) 하루가 빈틈없이 맞아떨어져야 한다.
+  { id: "session3", name: "3차 집필", category: "집필", minutes: 120, minMinutes: 60, days: EXCEPT_THU },
+  { id: "exercise", name: "운동", category: "운동", minutes: 60, minMinutes: 30, anchor: "clock", fixedAt: hhmmToBoundaryMinutes("21:00"), days: MON_WED_FRI },
+  { id: "rest", name: "휴식", category: "여유", minutes: 60, minMinutes: 0 },
+  { id: "rest2", name: "밤 휴식", category: "여유", minutes: 60, minMinutes: 0 },
+  { id: "sleep", name: "취침", category: "기타", minutes: 0, protected: true, anchor: "sleep", fixedAt: hhmmToBoundaryMinutes("00:00") },
+];
+
+/**
+ * 학기 루틴. 방학 배열에서 3차 집필을 빼고, 2차 집필을 공강인 월요일 전용으로
+ * 돌린 것이다 — 강의가 하루의 절반을 가져가므로 집필 1 + 작업 1이 기본이고,
+ * 시간이 남는 월요일만 집필 2 + 작업 1이 된다.
+ *
+ * 집필 블록 id를 session1/session2로 유지하는 이유: novel-assign.js가 집필
+ * 블록 id로 소설 일정을 배정하므로, id가 같아야 학기에도 배정이 그대로 돈다.
+ */
+export const SEMESTER_BLOCKS = [
+  { id: "wake", name: "기상", category: "기타", minutes: 0, anchor: "wake", protected: true },
+  { id: "morning", name: "준비 여유", category: "여유", minutes: 60, minMinutes: 60, prep: true },
+  { id: "session1", name: "집필", category: "집필", minutes: 120, minMinutes: 60, days: EXCEPT_THU },
+  { id: "buffer1", name: "여유", category: "여유", minutes: 60, minMinutes: 0 },
+  { id: "lunch", name: "점심 식사", category: "식사", minutes: 60, minMinutes: 60, protected: true, anchor: "clock", fixedAt: hhmmToBoundaryMinutes("12:00") },
+  { id: "session2", name: "집필", category: "집필", minutes: 120, minMinutes: 60, days: [0] },
+  { id: "work", name: "작업", category: "작업", minutes: 120, minMinutes: 30, days: EXCEPT_THU },
+  { id: "buffer2", name: "오후 여유", category: "여유", minutes: 60, minMinutes: 0 },
+  { id: "dinner", name: "저녁 식사", category: "식사", minutes: 60, minMinutes: 60, protected: true, anchor: "clock", fixedAt: hhmmToBoundaryMinutes("18:00") },
+  // 방학과 달리 저녁 뒤에 집필이 없다. 그래서 휴식이 저녁~운동 사이를 맡고,
+  // 밤 휴식이 운동 뒤를 맡는다 — 배열 순서가 곧 그날 저녁의 모양이다.
+  { id: "rest", name: "휴식", category: "여유", minutes: 60, minMinutes: 0 },
+  { id: "exercise", name: "운동", category: "운동", minutes: 60, minMinutes: 30, anchor: "clock", fixedAt: hhmmToBoundaryMinutes("21:00"), days: MON_WED_FRI },
+  { id: "rest2", name: "밤 휴식", category: "여유", minutes: 60, minMinutes: 0 },
+  { id: "sleep", name: "취침", category: "기타", minutes: 0, protected: true, anchor: "sleep", fixedAt: hhmmToBoundaryMinutes("00:00") },
 ];
 
 /**
@@ -240,9 +281,6 @@ function sortAnchorsByTime(work, sleepMinutes) {
  */
 export function computeSchedule({ blocks = BASE_BLOCKS, settings = DEFAULT_SETTINGS, weekday, wakeMinutes, sleepMinutes }) {
   const priority = settings.reducePriority || DEFAULT_SETTINGS.reducePriority;
-  const dayBoundaryHour = settings.dayBoundaryHour ?? DEFAULT_SETTINGS.dayBoundaryHour;
-  const baseWakeMinutes = hhmmToBoundaryMinutes(settings.baseWake, dayBoundaryHour);
-
   // 오늘 반복 대상이 아닌 블록(예: 화/목의 운동)은 애초에 하루에서 빠진다.
   // 깊은 복사를 해서 호출자의 blocks 배열/객체를 절대 변형하지 않는다.
   const work = sortAnchorsByTime(
@@ -253,17 +291,7 @@ export function computeSchedule({ blocks = BASE_BLOCKS, settings = DEFAULT_SETTI
   const adjustments = [];
   const warnings = [];
 
-  // 1) 기상이 기준보다 늦으면 아침 식사는 우선순위 목록과 무관하게 무조건 삭제.
-  if (wakeMinutes > baseWakeMinutes && settings.dropBreakfastWhenLate) {
-    for (const b of work) {
-      if (b.id === "breakfast" && b.minutes > 0) {
-        adjustments.push({ id: b.id, name: b.name, before: b.minutes, after: 0, type: "removed", reason: "wake-delayed" });
-        b.minutes = 0;
-      }
-    }
-  }
-
-  // 2) clock/sleep 앵커를 경계로 세그먼트를 나누며 순서대로 배치.
+  // clock/sleep 앵커를 경계로 세그먼트를 나누며 순서대로 배치.
   const resultBlocks = [];
   let cursor = wakeMinutes;
   let segment = [];
@@ -298,18 +326,22 @@ export function computeSchedule({ blocks = BASE_BLOCKS, settings = DEFAULT_SETTI
       const fixedAt = b.anchor === "sleep" && sleepMinutes != null ? sleepMinutes : b.fixedAt;
       const budget = fixedAt - cursor;
       if (budget < 0) {
-        // 기상 자체가 이 앵커의 고정 시각을 이미 지나버린 극단적인 경우.
-        // 취침 우선 원칙과 마찬가지로 앵커 시각을 뒤로 밀지 않고, 대신
-        // 세그먼트 전체를 비우고 경고를 남긴다 — "무리한 하루"를 조용히
-        // 숨기지 않고 사용자에게 드러내는 편을 택했다.
+        // 앞선 앵커가 이 앵커의 고정 시각을 이미 지나버린 경우. 취침 우선
+        // 원칙과 마찬가지로 앵커 시각을 뒤로 밀지 않고, 대신 세그먼트 전체를
+        // 비운다.
+        let lost = false;
         for (const sb of segment) {
           if (sb.minutes > 0) {
             adjustments.push({ id: sb.id, name: sb.name, before: sb.minutes, after: 0, type: "removed", reason: "segment-overflow" });
             sb.minutes = 0;
+            lost = true;
           }
           resultBlocks.push({ ...sb, start: cursor, end: cursor });
         }
-        warnings.push({ type: "segment-empty", beforeId: b.id });
+        // 경고는 정말로 뭔가를 잃었을 때만. 비어 있는 세그먼트를 지나쳐 앵커가
+        // 밀리는 건 정상 상황이다 — 목요일처럼 강의가 저녁 시각을 넘겨 끝나면
+        // 매주 "무리한 하루" 경고가 뜨게 된다.
+        if (lost) warnings.push({ type: "segment-empty", beforeId: b.id });
         segment = [];
         cursor = Math.max(cursor, fixedAt); // 타임라인이 거꾸로 흐르지 않도록.
       } else {

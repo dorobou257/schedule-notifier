@@ -5,9 +5,14 @@
 // localStorage가 아예 없는 환경(Node)이나 접근이 막힌 환경(사생활 보호 모드)에서도
 // 죽지 않는다. 읽기·쓰기 모두 try/catch로 감싸 두었고, 그 경우 세션 동안은
 // 메모리 상태로만 동작한다.
-import { BASE_BLOCKS, DEFAULT_SETTINGS, logicalDateKey } from "./routine.js";
+import { BASE_BLOCKS, SEMESTER_BLOCKS, DEFAULT_SETTINGS, logicalDateKey } from "./routine.js";
+import { isWithinSemester, parseLectures } from "./lectures.js";
+import { SEMESTER, TIMETABLE } from "./semester-2026-2.js";
 
 export const STORAGE_KEY = "schedule.v1";
+
+/** 저장본 모양의 버전. 올릴 때마다 migrate()에 한 번짜리 손질을 더한다. */
+export const STORE_VERSION = 2;
 
 export function emptySleep() {
   // forDate: 이 취침 기록이 "어느 논리적 날짜의 기상"을 예측하는지. 취침은 보통
@@ -26,9 +31,12 @@ export function nextDateKey(dateKey) {
 
 export function defaultStore() {
   return {
-    version: 1,
+    version: STORE_VERSION,
     settings: { ...DEFAULT_SETTINGS },
+    // 방학 루틴과 학기 루틴을 따로 둔다. 강의가 하루의 절반을 가져가는 학기에는
+    // 집필·작업 횟수 자체가 다르다 — 식사 시각만 갈아끼우는 걸로는 안 된다.
     blocks: BASE_BLOCKS.map((b) => ({ ...b })),
+    semesterBlocks: SEMESTER_BLOCKS.map((b) => ({ ...b })),
     presets: {},
     today: emptySleep(),
     // 그날 하루만 적용되는 손질. 날짜가 바뀌면 통째로 비운다.
@@ -42,7 +50,7 @@ export function defaultStore() {
     // 남은 집필 블록에 순서대로 자동 배정된다. 날짜가 바뀌면 통째로 비운다.
     novelAssign: { date: null, map: {}, excluded: [] },
     // 끼니별로 등록해 둔 메뉴 후보. 오래 남는다(하루짜리가 아니다).
-    mealPool: { breakfast: [], lunch: [], dinner: [] },
+    mealPool: { lunch: [], dinner: [] },
     // 오늘의 식단. byBlockId[식사 블록 id] = "김치찌개". 날짜가 바뀌면 비운다.
     meals: { date: null, byBlockId: {} },
     // 최근에 뭘 먹었는지. 같은 메뉴가 연달아 나오지 않게 하는 데만 쓰므로
@@ -50,10 +58,29 @@ export function defaultStore() {
     mealHistory: [],
     // 강의 시간표. blocks와 따로 두는 이유: 학기마다 통째로 갈아끼우는데,
     // 사용자가 손봐온 루틴까지 같이 덮으면 안 된다.
-    lectures: [],
+    lectures: parseLectures(TIMETABLE).lectures,
     // 학기 기간. 비워두면 "항상"으로 본다 — 적지 않아도 쓸 수 있어야 한다.
-    semester: { start: null, end: null },
+    semester: { ...SEMESTER },
   };
+}
+
+/**
+ * 이 날짜에 적용할 루틴 배열. 학기 안이면 학기 루틴, 아니면 방학 루틴이다.
+ * 화면·주간 보기·저장 어느 쪽이든 반드시 이 함수를 거쳐야 둘이 어긋나지 않는다.
+ *
+ * 학기 기간을 아예 안 적어두면 방학 루틴을 쓴다 — isWithinSemester는 비어 있는
+ * 기간을 "항상"으로 보지만, 여기서는 그 반대가 맞다(학기를 적지 않은 사람에게
+ * 강의 전제의 루틴을 씌울 이유가 없다).
+ */
+export function activeBlocks(dateKey) {
+  const s = store.semester || {};
+  const bounded = !!(s.start || s.end);
+  return bounded && isWithinSemester(dateKey, s) ? store.semesterBlocks : store.blocks;
+}
+
+/** 이 날짜의 루틴이 저장본의 어느 칸에 들어 있는지(순서 편집을 되돌려 쓸 때 필요). */
+export function activeBlocksKey(dateKey) {
+  return activeBlocks(dateKey) === store.semesterBlocks ? "semesterBlocks" : "blocks";
 }
 
 /** 식사 기록을 며칠치까지 들고 있을지. */
@@ -84,17 +111,12 @@ export function shiftDateKey(dateKey, days) {
  */
 export function migrate(parsed) {
   const base = defaultStore();
-  const p = parsed && typeof parsed === "object" ? parsed : {};
+  const p = upgrade(parsed && typeof parsed === "object" ? parsed : {}, base);
   return {
-    version: 1,
-    settings: {
-      ...base.settings,
-      ...(p.settings || {}),
-      // 통째로 얕은 병합만 하면 예전 저장본(이 필드가 없던 시절)에서 undefined가
-      // 그대로 들어온다. 세 끼가 반드시 있어야 화면 쪽이 방어하지 않아도 된다.
-      semesterMeals: { ...base.settings.semesterMeals, ...(p.settings?.semesterMeals || {}) },
-    },
+    version: STORE_VERSION,
+    settings: { ...base.settings, ...(p.settings || {}) },
     blocks: Array.isArray(p.blocks) && p.blocks.length ? p.blocks : base.blocks,
+    semesterBlocks: Array.isArray(p.semesterBlocks) && p.semesterBlocks.length ? p.semesterBlocks : base.semesterBlocks,
     presets: p.presets && typeof p.presets === "object" ? p.presets : {},
     today: p.today && typeof p.today === "object" ? { ...emptySleep(), ...p.today } : base.today,
     dayTweaks:
@@ -116,7 +138,6 @@ export function migrate(parsed) {
           }
         : base.novelAssign,
     mealPool: {
-      breakfast: strings(p.mealPool?.breakfast),
       lunch: strings(p.mealPool?.lunch),
       dinner: strings(p.mealPool?.dinner),
     },
@@ -134,6 +155,44 @@ export function migrate(parsed) {
       p.semester && typeof p.semester === "object"
         ? { start: p.semester.start || null, end: p.semester.end || null }
         : base.semester,
+  };
+}
+
+/**
+ * 버전이 낮은 저장본에 한 번짜리 손질을 한다. migrate()의 모양 정리와 달리
+ * 여기서는 "예전 값을 새 값으로 갈아끼우는" 일만 한다 — 매번 돌면 사용자가
+ * 그 뒤에 고친 것을 계속 되돌려버리므로 version으로 딱 한 번만 지난다.
+ *
+ * v1 → v2: 2026년 2학기 개편. 기상 08:00은 그대로 두고 취침을 00:00으로,
+ * 수면을 8시간으로 늘리고 아침 식사를 없앴다. 루틴 자체를 갈아엎는 게 목적이라
+ * 사용자가 손봐온 blocks도 함께 덮는다 — "학기 시간표를 갈아끼워도 손본 루틴은
+ * 지키자"던 원칙(defaultStore의 lectures 주석)과 여기서만 일부러 어긋난다.
+ * 시간표와 학기 기간은 이미 적어둔 것이 있으면 건드리지 않는다.
+ */
+function upgrade(p, base) {
+  if (Number(p.version) >= 2) return p;
+
+  const settings = { ...(p.settings || {}) };
+  delete settings.semesterMeals;
+  delete settings.dropBreakfastWhenLate;
+  settings.baseSleep = base.settings.baseSleep;
+  settings.sleepTargetMinutes = base.settings.sleepTargetMinutes;
+
+  const mealPool = { ...(p.mealPool || {}) };
+  delete mealPool.breakfast;
+  const byBlockId = { ...(p.meals?.byBlockId || {}) };
+  delete byBlockId.breakfast;
+
+  return {
+    ...p,
+    version: 2,
+    settings,
+    mealPool,
+    meals: { ...(p.meals || {}), byBlockId },
+    blocks: base.blocks,
+    semesterBlocks: base.semesterBlocks,
+    lectures: Array.isArray(p.lectures) && p.lectures.length ? p.lectures : base.lectures,
+    semester: p.semester?.start || p.semester?.end ? p.semester : base.semester,
   };
 }
 

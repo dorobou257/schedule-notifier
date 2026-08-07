@@ -4,19 +4,24 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  blocksDisplacedBy,
   computeDayWithLectures,
-  applySemesterMealTimes,
   parseLectureLine,
   parseLectures,
   formatLectureLine,
   isWithinSemester,
   lectureBlocks,
-  mergeLectureBlocks,
   minutesToHHMM,
   DAY_NAMES,
 } from "../docs/lectures.js";
-import { computeSchedule, DEFAULT_SETTINGS, BASE_BLOCKS, hhmmToBoundaryMinutes, boundaryMinutesToHHMM } from "../docs/routine.js";
+import {
+  computeSchedule,
+  DEFAULT_SETTINGS,
+  BASE_BLOCKS,
+  SEMESTER_BLOCKS,
+  hhmmToBoundaryMinutes,
+  boundaryMinutesToHHMM,
+} from "../docs/routine.js";
+import { SEMESTER, TIMETABLE } from "../docs/semester-2026-2.js";
 
 // --- 한 줄 읽기 -------------------------------------------------------------
 
@@ -148,178 +153,139 @@ test("경계 시각을 바꾸면 고정 시각 좌표도 따라 움직인다", (
   assert.equal(boundaryMinutesToHHMM(b.fixedAt, 6), "13:00");
 });
 
-// --- 루틴과 합쳐 하루 만들기 ------------------------------------------------
+// --- 2026-2학기 실제 시간표로 일주일을 통째로 못 박는다 ---------------------
+//
+// 여기가 이 앱의 계약이다. 요일별 결과가 손으로 검산한 표와 한 칸이라도
+// 달라지면 그건 회귀다.
 
-const TUE = 1;
+const MON = 0, TUE = 1, WED = 2, THU = 3, FRI = 4, SAT = 5, SUN = 6;
+const 학기시간표 = parseLectures(TIMETABLE).lectures;
+const 학기중 = "2026-09-07"; // 개강 다음 주 월요일
 
-/** 앱과 같은 방식으로 강의를 끼워 넣어 하루를 계산한다. */
-function dayWith(lectures, blocks = BASE_BLOCKS, weekday = TUE) {
-  return computeSchedule({
-    blocks: mergeLectureBlocks(blocks, lectures),
+/** 앱과 같은 경로(placement → computeSchedule)로 하루를 계산한다. */
+function day(weekday, { blocks = SEMESTER_BLOCKS, dateKey = 학기중, wake = "08:00" } = {}) {
+  return computeDayWithLectures({
+    blocks,
+    lectures: lectureBlocks(학기시간표, { dateKey, semester: SEMESTER, isHoliday: false }),
     settings: DEFAULT_SETTINGS,
     weekday,
-    wakeMinutes: hhmmToBoundaryMinutes("08:00"),
+    wakeMinutes: hhmmToBoundaryMinutes(wake),
   });
 }
 
-test("강의를 낀 화요일이 시각대로 배치되고 하루가 비지 않는다", () => {
-  // 기본 루틴의 점심은 13:00 고정인데 화요일 첫 강의도 13:00이다. 실제로도
-  // 강의가 있으면 점심을 옮겨야 하므로, 설정에서 옮긴 상태로 계산한다.
-  const blocks = BASE_BLOCKS.map((b) =>
-    b.id === "lunch" ? { ...b, fixedAt: hhmmToBoundaryMinutes("12:00") } : b
-  );
-  const lectures = lectureBlocks(시간표, ctx({ dateKey: "2026-03-10" }));
-  const r = dayWith(lectures, blocks);
+/** "08:00-09:00 준비 여유 · …" — 길이 0으로 눌린 블록은 그날 없는 것이라 뺀다. */
+const 표 = (r) =>
+  r.blocks
+    .filter((b) => b.minutes > 0)
+    .map((b) => `${boundaryMinutesToHHMM(b.start)}-${boundaryMinutesToHHMM(b.end)} ${b.name}`)
+    .join(" · ");
 
-  const at = (id) => boundaryMinutesToHHMM(r.blocks.find((b) => b.id === id).start);
-  const 화요일강의 = lectures.filter((l) => l.days.includes(TUE));
-  assert.equal(화요일강의.length, 2);
-  assert.equal(at(화요일강의[0].id), "13:00");
-  assert.equal(at(화요일강의[1].id), "16:00");
-  assert.equal(at("lunch"), "12:00");
-  assert.equal(at("sleep"), "00:30", "취침은 그대로 지켜진다");
-  assert.equal(r.warnings.length, 0, "강의를 넣었다고 하루가 무너지면 안 된다");
+const 학기표 = {
+  [MON]: "08:00-09:00 준비 여유 · 09:00-11:00 집필 · 11:00-12:00 여유 · 12:00-13:00 점심 식사 · 13:00-15:00 집필 · 15:00-17:00 작업 · 17:00-18:00 오후 여유 · 18:00-19:00 저녁 식사 · 19:00-21:00 휴식 · 21:00-22:00 운동 · 22:00-00:00 밤 휴식",
+  [TUE]: "08:00-09:00 준비 여유 · 09:00-12:00 문장실습Ⅱ · 12:00-13:00 점심 식사 · 13:00-15:00 집필 · 15:00-16:00 작업 · 16:00-17:00 크리틱Ⅳ · 17:00-18:00 여유 · 18:00-19:00 저녁 식사 · 19:00-00:00 휴식",
+  [WED]: "08:00-09:00 준비 여유 · 09:00-12:00 장르연구Ⅰ(로맨스심화) · 12:00-13:00 점심 식사 · 13:00-15:00 집필 · 15:00-17:00 작업 · 17:00-18:00 여유 · 18:00-19:00 저녁 식사 · 19:00-21:00 휴식 · 21:00-22:00 운동 · 22:00-00:00 밤 휴식",
+  [THU]: "08:00-09:00 준비 여유 · 09:00-12:00 장르연구Ⅴ(호러) · 12:00-13:00 점심 식사 · 13:00-16:00 웹소설창작실습Ⅳ(판무) · 16:00-19:00 캐릭터개발실습 · 19:00-20:00 저녁 식사 · 20:00-00:00 휴식",
+  [FRI]: "08:00-10:00 준비 여유 · 10:00-12:00 플롯의이해와적용Ⅱ · 12:00-13:00 점심 식사 · 13:00-16:00 플롯의이해와적용Ⅱ · 16:00-18:00 집필 · 18:00-19:00 저녁 식사 · 19:00-21:00 작업 · 21:00-22:00 운동 · 22:00-00:00 밤 휴식",
+  [SAT]: "08:00-09:00 준비 여유 · 09:00-11:00 집필 · 11:00-12:00 여유 · 12:00-13:00 점심 식사 · 13:00-15:00 작업 · 15:00-18:00 오후 여유 · 18:00-19:00 저녁 식사 · 19:00-00:00 휴식",
+  [SUN]: "08:00-09:00 준비 여유 · 09:00-11:00 집필 · 11:00-12:00 여유 · 12:00-13:00 점심 식사 · 13:00-15:00 작업 · 15:00-18:00 오후 여유 · 18:00-19:00 저녁 식사 · 19:00-00:00 휴식",
+};
+
+for (const [wd, expected] of Object.entries(학기표)) {
+  test(`학기 ${DAY_NAMES[wd]}요일 하루가 계획한 표 그대로다`, () => {
+    const r = day(Number(wd));
+    assert.equal(표(r), expected);
+    assert.equal(r.warnings.length, 0, "매주 뜨는 경고가 있으면 안 된다");
+    assert.equal(r.adjustments.length, 0, "매주 뜨는 조정 제안이 있으면 안 된다");
+  });
+}
+
+test("08:00~09:00은 준비 시간 — 어느 요일에도 집필·작업이 들어오지 않는다", () => {
+  for (let wd = 0; wd < 7; wd++) {
+    for (const b of day(wd).blocks) {
+      if (!["집필", "작업"].includes(b.category) || b.minutes <= 0) continue;
+      assert.ok(b.start >= hhmmToBoundaryMinutes("09:00"), `${DAY_NAMES[wd]} ${b.name}이 준비 시간을 침범했다`);
+    }
+  }
 });
 
-test("점심과 강의가 같은 시각이면 강의가 밀린다 — 화면이 알아챌 수 있어야 한다", () => {
-  // 기본 루틴 그대로(점심 13:00)면 13:00 강의가 14:00으로 밀린다. 조용히 밀리면
-  // 수업에 늦으므로, 화면은 "고정 시각과 실제 시각이 다르다"로 이 상황을 잡는다.
-  const lectures = lectureBlocks(시간표, ctx({ dateKey: "2026-03-10" }));
-  const r = dayWith(lectures);
+test("22:00 이후엔 어느 요일에도 집필·작업이 없다 — 밤은 언제나 휴식", () => {
+  for (let wd = 0; wd < 7; wd++) {
+    for (const blocks of [SEMESTER_BLOCKS, BASE_BLOCKS]) {
+      for (const b of day(wd, { blocks }).blocks) {
+        if (!["집필", "작업"].includes(b.category) || b.minutes <= 0) continue;
+        assert.ok(b.end <= hhmmToBoundaryMinutes("22:00"), `${DAY_NAMES[wd]} ${b.name}이 밤까지 넘어갔다`);
+      }
+    }
+  }
+});
 
+test("학기 월요일은 집필이 두 번, 다른 평일은 한 번", () => {
+  const 집필횟수 = (wd) => day(wd).blocks.filter((b) => b.category === "집필" && b.minutes > 0).length;
+  assert.equal(집필횟수(MON), 2, "공강인 월요일은 집필 두 타임");
+  for (const wd of [TUE, WED, FRI]) assert.equal(집필횟수(wd), 1);
+  assert.equal(집필횟수(THU), 0, "목요일은 휴일");
+});
+
+test("목요일은 강의 아홉 시간 — 집필·작업 0분에 경고도 없다", () => {
+  const r = day(THU);
+  assert.deepEqual(
+    r.blocks.filter((b) => ["집필", "작업"].includes(b.category) && b.minutes > 0),
+    []
+  );
+  assert.equal(r.warnings.length, 0, "강의가 저녁 시각을 넘겨 끝나는 건 정상이다");
+  assert.equal(boundaryMinutesToHHMM(r.blocks.find((b) => b.id === "dinner").start), "19:00");
+});
+
+test("방학 날짜에는 강의가 얹히지 않고 방학 표가 나온다", () => {
+  const r = day(TUE, { blocks: BASE_BLOCKS, dateKey: "2026-08-20" });
+  assert.deepEqual(r.blocks.filter((b) => b.category === "강의"), []);
+  assert.equal(
+    표(r),
+    "08:00-09:00 준비 여유 · 09:00-11:00 1차 집필 · 11:00-12:00 여유 · 12:00-13:00 점심 식사 · " +
+      "13:00-15:00 2차 집필 · 15:00-17:00 작업 · 17:00-18:00 오후 여유 · 18:00-19:00 저녁 식사 · " +
+      "19:00-21:00 3차 집필 · 21:00-00:00 휴식"
+  );
+});
+
+test("강의가 없는 날은 배치가 루틴을 손대지 않은 것과 같다", () => {
+  // 방학 월요일. gap이 블록 합과 맞아떨어지므로 placement를 거쳐도 결과가 같아야 한다.
+  const 배치 = day(MON, { blocks: BASE_BLOCKS, dateKey: "2026-08-17" });
+  const 그냥 = computeSchedule({
+    blocks: BASE_BLOCKS,
+    settings: DEFAULT_SETTINGS,
+    weekday: MON,
+    wakeMinutes: hhmmToBoundaryMinutes("08:00"),
+  });
+  assert.deepEqual(배치.displaced, new Set());
+  // 휴식 둘이 하나로 합쳐지는 것만 다르다.
+  assert.equal(표(배치), 표(그냥).replace("22:00-23:00 휴식 · 23:00-00:00 밤 휴식", "22:00-00:00 휴식"));
+});
+
+test("공강인 월요일에 늦잠을 자면 여유가 먼저 줄고 집필이 남는다", () => {
+  const r = day(MON, { wake: "10:00" });
+  const 분 = (id) => {
+    const b = r.blocks.find((x) => x.id === id);
+    return b ? b.end - b.start : 0;
+  };
+  assert.equal(분("morning"), 60, "준비 시간 한 시간은 지켜진다");
+  assert.equal(분("session1") + 분("session2"), 240, "집필 네 시간은 자리를 옮겨서라도 지킨다");
+  assert.equal(boundaryMinutesToHHMM(r.blocks.find((b) => b.id === "lunch").start), "12:00");
+  assert.equal(boundaryMinutesToHHMM(r.blocks.find((b) => b.id === "sleep").start), "00:00");
+
+  // 두 시간 늦게 일어났으니 어딘가는 줄어야 한다 — 그걸 제안 시트가 알린다.
+  assert.ok(r.adjustments.length, "무엇이 줄었는지 알려야 한다");
+  for (const a of r.adjustments) assert.ok(a.after < a.before);
+  assert.ok(r.adjustments.some((a) => ["작업", "여유"].includes(a.name) || a.id.startsWith("buffer") || a.id === "work"));
+});
+
+test("강의 시작 시각을 넘겨 일어나면 강의가 밀린 것으로 드러난다", () => {
+  // 조용히 넘기면 수업에 늦는다 — 화면은 "고정 시각 ≠ 실제 시각"으로 이걸 잡는다.
+  const r = day(WED, { wake: "10:00" });
   const pushed = r.blocks
     .filter((b) => b.anchor === "clock" && b.fixedAt != null && b.start !== b.fixedAt)
     .map((b) => `${b.name} ${boundaryMinutesToHHMM(b.fixedAt)}→${boundaryMinutesToHHMM(b.start)}`);
-
-  // 한 번 밀리면 뒤 강의까지 연쇄로 밀린다. 그래서 더더욱 조용히 넘기면 안 된다.
-  assert.deepEqual(pushed, ["문장실습Ⅰ(B) 13:00→14:00", "장르연구Ⅲ(판무B) 16:00→17:00"]);
-  assert.equal(boundaryMinutesToHHMM(r.blocks.find((b) => b.id === "lunch").start), "13:00", "점심은 제자리를 지킨다");
-});
-
-test("월요일엔 화요일 강의가 나오지 않는다", () => {
-  const r = dayWith(lectureBlocks(시간표, ctx()), BASE_BLOCKS, 0);
-  const 있는강의 = r.blocks.filter((b) => b.category === "강의").map((b) => b.name);
-  assert.deepEqual(있는강의, ["웹소설산업과비즈니스(A)"]);
-});
-
-// --- 강의가 집필·작업을 대신한다 ------------------------------------------
-
-/** 학기 중 점심을 12:00으로 옮긴 루틴(복학 후의 실제 설정). */
-const 학기루틴 = applySemesterMealTimes(BASE_BLOCKS, { lunch: "12:00" });
-
-const day = (lectures, weekday, blocks = 학기루틴) =>
-  computeDayWithLectures({
-    blocks,
-    lectures,
-    settings: DEFAULT_SETTINGS,
-    weekday,
-    wakeMinutes: hhmmToBoundaryMinutes("08:00"),
-  });
-
-test("강의 시간과 겹치는 집필·작업만 밀려난다", () => {
-  const base = computeSchedule({
-    blocks: 학기루틴,
-    settings: DEFAULT_SETTINGS,
-    weekday: TUE,
-    wakeMinutes: hhmmToBoundaryMinutes("08:00"),
-  });
-  // 13:00-19:00 강의. 이 시간대엔 2차 집필·작업·3차 집필이 걸쳐 있다.
-  const lectures = lectureBlocks(시간표, ctx({ dateKey: "2026-03-10" })).filter((l) => l.days.includes(TUE));
-  const displaced = blocksDisplacedBy(base.blocks, lectures);
-  assert.deepEqual([...displaced].sort(), ["session2", "session3", "work"]);
-});
-
-test("식사와 하루의 끝은 강의가 밀어내지 못한다", () => {
-  const base = computeSchedule({
-    blocks: 학기루틴,
-    settings: DEFAULT_SETTINGS,
-    weekday: TUE,
-    wakeMinutes: hhmmToBoundaryMinutes("08:00"),
-  });
-  const lectures = lectureBlocks(시간표, ctx({ dateKey: "2026-03-10" })).filter((l) => l.days.includes(TUE));
-  const displaced = blocksDisplacedBy(base.blocks, lectures);
-  // 저녁 식사는 강의 시간과 겹치지만 끼니는 거를 수 없다 — 뒤로 흘러간다.
-  for (const id of ["breakfast", "lunch", "dinner", "sleep", "wake", "rest", "buffer"]) {
-    assert.equal(displaced.has(id), false, `${id}는 밀려나면 안 된다`);
-  }
-});
-
-test("강의가 집필을 대신하면 하루가 밤까지 늘어나지 않는다", () => {
-  const lectures = lectureBlocks(시간표, ctx({ dateKey: "2026-03-10" })).filter((l) => l.days.includes(TUE));
-  const r = day(lectures, TUE);
-  const at = (id) => boundaryMinutesToHHMM(r.blocks.find((b) => b.id === id).start);
-
-  assert.equal(at(lectures[0].id), "13:00");
-  assert.equal(at(lectures[1].id), "16:00");
-  // 강의가 대신한 집필·작업은 하루에서 아예 빠진다 — 밤 열한 시로 밀리지 않는다.
-  for (const id of ["session2", "work", "session3"]) {
-    assert.equal(r.blocks.find((b) => b.id === id), undefined, `${id}는 강의가 대신한다`);
-  }
-  assert.equal(at("dinner"), "19:00", "저녁은 강의가 끝나고 바로");
-  assert.equal(at("sleep"), "00:30");
-  assert.equal(r.warnings.length, 0);
-});
-
-test("강의가 없는 날은 루틴이 그대로다", () => {
-  const lectures = lectureBlocks(시간표, ctx()).filter((l) => l.days.includes(4)); // 금요일
-  const r = day(lectures, 4);
-  assert.deepEqual(r.displaced, new Set());
-  assert.deepEqual(
-    r.blocks.map((b) => b.id),
-    computeSchedule({
-      blocks: 학기루틴,
-      settings: DEFAULT_SETTINGS,
-      weekday: 4,
-      wakeMinutes: hhmmToBoundaryMinutes("08:00"),
-    }).blocks.map((b) => b.id)
-  );
-});
-
-test("오전 집필은 오후 강의에 밀리지 않는다", () => {
-  const lectures = lectureBlocks(시간표, ctx()).filter((l) => l.days.includes(0)); // 월 13:00-16:00
-  const r = day(lectures, 0);
-  const s1 = r.blocks.find((b) => b.id === "session1");
-  assert.equal(boundaryMinutesToHHMM(s1.start), "09:00", "1차 집필은 강의와 겹치지 않는다");
-  assert.equal(r.displaced.has("session1"), false);
-  assert.equal(r.displaced.has("session2"), true, "13:00에 있던 2차 집필은 강의가 대신한다");
-});
-
-// --- 학기 중 식사 시각 ------------------------------------------------------
-
-test("학기 중 식사 시각이 평소 시각을 덮는다", () => {
-  const out = applySemesterMealTimes(BASE_BLOCKS, { lunch: "12:00" });
-  const lunch = out.find((b) => b.id === "lunch");
-  assert.equal(boundaryMinutesToHHMM(lunch.fixedAt), "12:00");
-  assert.equal(lunch.anchor, "clock");
-  assert.equal(BASE_BLOCKS.find((b) => b.id === "lunch").fixedAt, hhmmToBoundaryMinutes("13:00"), "원본은 그대로");
-});
-
-test("비운 끼니는 건드리지 않는다", () => {
-  const out = applySemesterMealTimes(BASE_BLOCKS, { breakfast: "", lunch: "12:00", dinner: "" });
-  assert.equal(out.find((b) => b.id === "breakfast").anchor, undefined);
-  assert.equal(out.find((b) => b.id === "dinner").fixedAt, undefined);
-});
-
-test("셋 다 비었으면 원래 배열을 그대로 돌려준다", () => {
-  assert.equal(applySemesterMealTimes(BASE_BLOCKS, { lunch: "" }), BASE_BLOCKS);
-  assert.equal(applySemesterMealTimes(BASE_BLOCKS, null), BASE_BLOCKS);
-});
-
-test("고정이 아니던 식사도 학기 중에는 고정된다", () => {
-  // 저녁은 기본적으로 유동 블록이다. 학기 중 시각을 적으면 그날은 시각이 선다.
-  const out = applySemesterMealTimes(BASE_BLOCKS, { dinner: "18:30" });
-  const dinner = out.find((b) => b.id === "dinner");
-  assert.equal(dinner.anchor, "clock");
-  assert.equal(boundaryMinutesToHHMM(dinner.fixedAt), "18:30");
-});
-
-test("점심을 12:00으로 옮기면 13:00 강의와 더는 부딪히지 않는다", () => {
-  const lectures = lectureBlocks(시간표, ctx({ dateKey: "2026-03-10" })).filter((l) => l.days.includes(TUE));
-  const 밀린것 = (blocks) =>
-    blocks.filter((b) => b.anchor === "clock" && b.fixedAt != null && b.start !== b.fixedAt).map((b) => b.name);
-
-  assert.notDeepEqual(밀린것(day(lectures, TUE, BASE_BLOCKS).blocks), [], "점심이 13:00이면 강의가 밀린다");
-  assert.deepEqual(밀린것(day(lectures, TUE).blocks), [], "12:00으로 옮기면 제 시각에 앉는다");
+  assert.ok(pushed.includes("장르연구Ⅰ(로맨스심화) 09:00→10:00"));
+  assert.equal(boundaryMinutesToHHMM(r.blocks.find((b) => b.id === "sleep").start), "00:00", "취침은 그래도 지켜진다");
 });
 
 test("DAY_NAMES는 월=0 규칙(logicalWeekday와 같다)", () => {

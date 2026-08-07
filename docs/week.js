@@ -13,7 +13,6 @@ import { hhmmToBoundaryMinutes, boundaryMinutesToHHMM } from "./routine.js";
 import {
   lectureBlocks,
   computeDayWithLectures,
-  applySemesterMealTimes,
   isWithinSemester,
   LECTURE_CATEGORY,
   DAY_NAMES,
@@ -56,7 +55,8 @@ export function shortDateLabel(dateKey) {
  * @param {object} p
  * @param {string} p.startKey 주의 첫날(월요일)
  * @param {object|null} p.data 워커 /week 응답(없으면 노션 항목 없이 루틴만)
- * @param {Array} p.blocks 루틴 원본(store.blocks)
+ * @param {Array} p.blocks 방학 루틴(store.blocks)
+ * @param {Array} p.semesterBlocks 학기 루틴(store.semesterBlocks). 없으면 blocks를 쓴다.
  * @param {object} p.settings store.settings
  * @param {Array} p.lectures store.lectures
  * @param {object} p.semester store.semester
@@ -64,7 +64,7 @@ export function shortDateLabel(dateKey) {
  * @param {Array|null} p.todayBlocks 오늘은 이미 계산된 결과를 그대로 쓴다
  *   (취침 기록·하루짜리 손질이 반영된 것과 어긋나면 안 된다)
  */
-export function buildWeekDays({ startKey, data, blocks, settings, lectures, semester, todayKey, todayBlocks }) {
+export function buildWeekDays({ startKey, data, blocks, semesterBlocks, settings, lectures, semester, todayKey, todayBlocks }) {
   const dayBoundaryHour = settings.dayBoundaryHour ?? 4;
   const wakeMinutes = hhmmToBoundaryMinutes(settings.baseWake, dayBoundaryHour);
   const days = (data && data.days) || {};
@@ -87,9 +87,10 @@ export function buildWeekDays({ startKey, data, blocks, settings, lectures, seme
         isHoliday: holidayNames.length > 0,
         dayBoundaryHour,
       });
-      const routine = isWithinSemester(dateKey, semester)
-        ? applySemesterMealTimes(blocks, settings.semesterMeals, dayBoundaryHour)
-        : blocks;
+      // 개강 경계 주에는 같은 주 안에서도 방학 루틴과 학기 루틴이 갈린다.
+      // store.activeBlocks와 같은 규칙이어야 오늘 화면과 어긋나지 않는다.
+      const bounded = !!(semester?.start || semester?.end);
+      const routine = bounded && isWithinSemester(dateKey, semester) ? semesterBlocks || blocks : blocks;
       dayBlocks = computeDayWithLectures({
         blocks: routine,
         lectures: lecs,
@@ -232,6 +233,7 @@ export function renderWeekView({ todayKey, todayBlocks, rerender }) {
     startKey: weekState.startKey,
     data: weekState.data,
     blocks: store.blocks,
+    semesterBlocks: store.semesterBlocks,
     settings: store.settings,
     lectures: store.lectures,
     semester: store.semester,

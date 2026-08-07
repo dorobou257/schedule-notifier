@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   BASE_BLOCKS,
+  SEMESTER_BLOCKS,
   DEFAULT_SETTINGS,
   computeSchedule,
   computeWakeMinutes,
@@ -15,6 +16,7 @@ import {
 
 const MON = 0; // 월요일 (notify.py 규칙: 월=0 … 일=6). 운동(월/수/금) 활성일.
 const TUE = 1; // 운동 비활성일 확인용.
+const THU = 3; // 집필·작업을 아예 하지 않는 휴일.
 
 function byId(result, id) {
   return result.blocks.find((b) => b.id === id);
@@ -26,14 +28,14 @@ function minutesOf(result, id) {
 
 test("hhmm <-> boundary minutes round-trip", () => {
   assert.equal(hhmmToBoundaryMinutes("08:00"), 240);
-  assert.equal(hhmmToBoundaryMinutes("13:00"), 540);
-  assert.equal(hhmmToBoundaryMinutes("00:30"), 1230);
+  assert.equal(hhmmToBoundaryMinutes("12:00"), 480);
+  assert.equal(hhmmToBoundaryMinutes("00:00"), 1200);
   assert.equal(boundaryMinutesToHHMM(240), "08:00");
-  assert.equal(boundaryMinutesToHHMM(540), "13:00");
-  assert.equal(boundaryMinutesToHHMM(1230), "00:30");
+  assert.equal(boundaryMinutesToHHMM(480), "12:00");
+  assert.equal(boundaryMinutesToHHMM(1200), "00:00");
 });
 
-test("기상 08:00(기준) → 기본 루틴과 완전히 일치, 합계 990분", () => {
+test("기상 08:00(기준) → 방학 루틴과 완전히 일치, 합계 960분", () => {
   const wakeMinutes = hhmmToBoundaryMinutes("08:00");
   const r = computeSchedule({ blocks: BASE_BLOCKS, settings: DEFAULT_SETTINGS, weekday: MON, wakeMinutes });
 
@@ -41,16 +43,18 @@ test("기상 08:00(기준) → 기본 루틴과 완전히 일치, 합계 990분"
   assert.equal(r.adjustments.length, 0);
 
   const expected = [
-    ["breakfast", "08:00", "09:00"],
+    ["morning", "08:00", "09:00"],
     ["session1", "09:00", "11:00"],
-    ["buffer", "11:00", "13:00"],
-    ["lunch", "13:00", "14:00"],
-    ["session2", "14:00", "16:00"],
-    ["work", "16:00", "18:00"],
+    ["buffer1", "11:00", "12:00"],
+    ["lunch", "12:00", "13:00"],
+    ["session2", "13:00", "15:00"],
+    ["work", "15:00", "17:00"],
+    ["buffer2", "17:00", "18:00"],
     ["dinner", "18:00", "19:00"],
     ["session3", "19:00", "21:00"],
     ["exercise", "21:00", "22:00"],
-    ["rest", "22:00", "00:30"],
+    ["rest", "22:00", "23:00"],
+    ["rest2", "23:00", "00:00"],
   ];
   for (const [id, start, end] of expected) {
     const b = byId(r, id);
@@ -59,44 +63,55 @@ test("기상 08:00(기준) → 기본 루틴과 완전히 일치, 합계 990분"
   }
 
   const sleep = byId(r, "sleep");
-  assert.equal(boundaryMinutesToHHMM(sleep.start), "00:30");
+  assert.equal(boundaryMinutesToHHMM(sleep.start), "00:00");
 
   const total = r.blocks.filter((b) => b.anchor !== "wake" && b.anchor !== "sleep").reduce((s, b) => s + (b.end - b.start), 0);
-  assert.equal(total, 990);
+  assert.equal(total, 960);
 });
 
-test("기상 10:00(2시간 지연) → 아침 삭제 + 여유만 축소, 집필 3블록 생존, 취침 00:30 유지", () => {
+test("아침 식사는 루틴에서 아예 사라졌다", () => {
+  assert.equal(BASE_BLOCKS.find((b) => b.id === "breakfast"), undefined);
+  assert.equal(SEMESTER_BLOCKS.find((b) => b.id === "breakfast"), undefined);
+  assert.equal(DEFAULT_SETTINGS.dropBreakfastWhenLate, undefined, "아침을 지우던 설정도 함께 없앤다");
+  assert.equal(DEFAULT_SETTINGS.semesterMeals, undefined, "학기 전용 식사 시각도 없앤다(점심은 언제나 12:00)");
+});
+
+test("목요일은 집필도 작업도 없는 휴일 — 방학에도 학기에도", () => {
+  const wakeMinutes = hhmmToBoundaryMinutes("08:00");
+  for (const blocks of [BASE_BLOCKS, SEMESTER_BLOCKS]) {
+    const r = computeSchedule({ blocks, settings: DEFAULT_SETTINGS, weekday: THU, wakeMinutes });
+    const 생산 = r.blocks.filter((b) => ["집필", "작업"].includes(b.category) && b.minutes > 0);
+    assert.deepEqual(생산, [], "목요일엔 집필·작업 블록이 하나도 없어야 한다");
+    assert.equal(r.warnings.length, 0);
+  }
+});
+
+test("기상 10:00(2시간 지연) → 여유가 먼저 사라지고 집필이 남는다", () => {
   const wakeMinutes = hhmmToBoundaryMinutes("10:00");
   const r = computeSchedule({ blocks: BASE_BLOCKS, settings: DEFAULT_SETTINGS, weekday: MON, wakeMinutes });
 
   assert.equal(r.warnings.length, 0);
-  assert.equal(minutesOf(r, "breakfast"), 0);
-  assert.equal(minutesOf(r, "session1"), 120, "1차 집필은 그대로 살아남는다");
-  assert.equal(minutesOf(r, "buffer"), 60, "여유가 120→60으로 흡수");
-  assert.equal(minutesOf(r, "session2"), 120);
+  assert.equal(minutesOf(r, "buffer1"), 0, "오전 여유가 먼저 통째로 사라진다");
+  assert.equal(minutesOf(r, "morning"), 60, "준비 시간 한 시간은 지켜진다");
+  assert.equal(minutesOf(r, "session1"), 60, "1차 집필은 최소치까지만 줄고 살아남는다");
+  assert.equal(minutesOf(r, "session2"), 120, "오후는 오전 사정과 무관하다");
   assert.equal(minutesOf(r, "session3"), 120);
-  assert.equal(boundaryMinutesToHHMM(byId(r, "lunch").start), "13:00");
-  assert.equal(boundaryMinutesToHHMM(byId(r, "sleep").start), "00:30");
-
-  const breakfastAdj = r.adjustments.find((a) => a.id === "breakfast");
-  assert.equal(breakfastAdj.type, "removed");
-  assert.equal(breakfastAdj.reason, "wake-delayed");
+  assert.equal(boundaryMinutesToHHMM(byId(r, "lunch").start), "12:00");
+  assert.equal(boundaryMinutesToHHMM(byId(r, "sleep").start), "00:00");
 });
 
-test("기상 12:00 → 여유 전부 회수 후 1차 집필까지 최소치로 축소, 오후는 무변화", () => {
+test("기상 12:00(점심 고정 시각과 동시) → 오전이 통째로 비지만 경고는 없다", () => {
   const wakeMinutes = hhmmToBoundaryMinutes("12:00");
   const r = computeSchedule({ blocks: BASE_BLOCKS, settings: DEFAULT_SETTINGS, weekday: MON, wakeMinutes });
 
-  assert.equal(minutesOf(r, "breakfast"), 0);
-  assert.equal(minutesOf(r, "buffer"), 0, "여유는 완전히 삭제된다");
-  assert.equal(minutesOf(r, "session1"), 60, "1차 집필은 최소치(60분)까지만 줄어들고 사라지지 않는다");
-  assert.equal(boundaryMinutesToHHMM(byId(r, "lunch").start), "13:00", "점심은 그대로 13시 고정");
-
-  // 오후 세그먼트는 오전 사정과 완전히 독립적으로 손대지 않는다.
-  for (const id of ["session2", "work", "dinner", "session3", "rest"]) {
+  for (const id of ["morning", "session1", "buffer1"]) {
+    assert.equal(minutesOf(r, id), 0, `${id}는 완전히 공백이어야 한다`);
+  }
+  assert.equal(boundaryMinutesToHHMM(byId(r, "lunch").start), "12:00", "점심은 그대로 12시 고정");
+  for (const id of ["session2", "work", "dinner", "session3"]) {
     assert.equal(minutesOf(r, id), BASE_BLOCKS.find((b) => b.id === id).minutes, `${id}는 오후라 변하지 않아야 한다`);
   }
-  assert.equal(boundaryMinutesToHHMM(byId(r, "sleep").start), "00:30");
+  assert.equal(boundaryMinutesToHHMM(byId(r, "sleep").start), "00:00");
 });
 
 test("기상 13:30(점심 고정 시각을 이미 지남) → 오전 세그먼트 전부 공백 + 경고", () => {
@@ -104,13 +119,27 @@ test("기상 13:30(점심 고정 시각을 이미 지남) → 오전 세그먼�
   const r = computeSchedule({ blocks: BASE_BLOCKS, settings: DEFAULT_SETTINGS, weekday: MON, wakeMinutes });
 
   assert.ok(r.warnings.some((w) => w.type === "segment-empty"), "세그먼트 공백 경고가 있어야 한다");
-  for (const id of ["breakfast", "session1", "buffer"]) {
+  for (const id of ["morning", "session1", "buffer1"]) {
     assert.equal(minutesOf(r, id), 0, `${id}는 완전히 공백이어야 한다`);
   }
   // 타임라인이 거꾸로 흐르지 않는다: 점심은 기상 이전 시각으로 밀려나지 않는다.
   assert.ok(byId(r, "lunch").start >= wakeMinutes);
-  // 오후 세그먼트(점심 이후)는 예산이 남아있으므로 여전히 정상 배치된다.
-  assert.equal(boundaryMinutesToHHMM(byId(r, "sleep").start), "00:30");
+  assert.equal(boundaryMinutesToHHMM(byId(r, "sleep").start), "00:00");
+});
+
+test("비어 있는 세그먼트를 지나쳐 앵커가 밀려도 경고를 남기지 않는다", () => {
+  // 학기 목요일이 이 모양이다 — 강의가 저녁 앵커(18:00)를 넘겨 19시에 끝난다.
+  // 잃은 것이 없는데도 경고를 띄우면 매주 목요일 "무리한 하루"가 뜬다(회귀 방지).
+  const blocks = [
+    { id: "wake", name: "기상", category: "기타", minutes: 0, anchor: "wake", protected: true },
+    { id: "lec", name: "강의", category: "강의", minutes: 180, minMinutes: 180, protected: true, anchor: "clock", fixedAt: at("16:00") },
+    { id: "dinner", name: "저녁 식사", category: "식사", minutes: 60, minMinutes: 60, protected: true, anchor: "clock", fixedAt: at("18:00") },
+    { id: "rest", name: "휴식", category: "여유", minutes: 60, minMinutes: 0 },
+    { id: "sleep", name: "취침", category: "기타", minutes: 0, protected: true, anchor: "sleep", fixedAt: at("00:00") },
+  ];
+  const r = computeSchedule({ blocks, settings: DEFAULT_SETTINGS, weekday: THU, wakeMinutes: at("08:00") });
+  assert.equal(r.warnings.length, 0, "잃은 블록이 없으면 경고도 없다");
+  assert.equal(boundaryMinutesToHHMM(byId(r, "dinner").start), "19:00", "저녁은 강의가 끝난 뒤로 밀린다");
 });
 
 test("기상 07:00(1시간 이름) → 여유가 남는 시간을 흡수해 점심까지 빈틈없이 채운다", () => {
@@ -118,54 +147,58 @@ test("기상 07:00(1시간 이름) → 여유가 남는 시간을 흡수해 점�
   const r = computeSchedule({ blocks: BASE_BLOCKS, settings: DEFAULT_SETTINGS, weekday: MON, wakeMinutes });
 
   assert.equal(r.adjustments.length, 0, "이른 기상은 삭제/축소를 유발하지 않는다(단순 확장은 기록 대상이 아님)");
-  assert.equal(minutesOf(r, "breakfast"), 60, "식사 시간 자체는 늘어나지 않는다");
-  assert.equal(minutesOf(r, "buffer"), 180, "1시간 여유분을 여유가 흡수해 120→180분");
-  assert.equal(boundaryMinutesToHHMM(byId(r, "breakfast").start), "07:00");
-  assert.equal(boundaryMinutesToHHMM(byId(r, "buffer").end), "13:00", "빈 시간 없이 점심 시작과 정확히 맞물린다");
-  assert.equal(boundaryMinutesToHHMM(byId(r, "lunch").start), "13:00");
+  assert.equal(minutesOf(r, "morning"), 60, "준비 시간 자체는 늘어나지 않는다");
+  assert.equal(minutesOf(r, "buffer1"), 120, "1시간 여유분을 오전 여유가 흡수해 60→120분");
+  assert.equal(boundaryMinutesToHHMM(byId(r, "morning").start), "07:00");
+  assert.equal(boundaryMinutesToHHMM(byId(r, "buffer1").end), "12:00", "빈 시간 없이 점심 시작과 정확히 맞물린다");
+  assert.equal(boundaryMinutesToHHMM(byId(r, "lunch").start), "12:00");
 });
 
 test("sleepMinutes로 취침을 미루면 휴식이 그만큼 늘어나 취침 시각과 맞물린다", () => {
   const wakeMinutes = hhmmToBoundaryMinutes("08:00");
-  const sleepMinutes = hhmmToBoundaryMinutes("02:00"); // 기준(00:30)보다 1시간 30분 늦음
+  const sleepMinutes = hhmmToBoundaryMinutes("01:30"); // 기준(00:00)보다 1시간 30분 늦음
   const r = computeSchedule({ blocks: BASE_BLOCKS, settings: DEFAULT_SETTINGS, weekday: MON, wakeMinutes, sleepMinutes });
 
-  assert.equal(boundaryMinutesToHHMM(byId(r, "sleep").start), "02:00", "취침 앵커 자체가 실제 예약 시각으로 옮겨간다");
-  assert.equal(minutesOf(r, "rest"), 240, "휴식이 90분을 더 흡수해 150→240분");
-  assert.equal(boundaryMinutesToHHMM(byId(r, "rest").end), "02:00", "빈 시간 없이 취침과 맞물린다");
-  // 아침~점심 이전 세그먼트는 취침 시각과 무관하게 그대로다.
-  assert.equal(minutesOf(r, "breakfast"), 60);
+  assert.equal(boundaryMinutesToHHMM(byId(r, "sleep").start), "01:30", "취침 앵커 자체가 실제 예약 시각으로 옮겨간다");
+  assert.equal(minutesOf(r, "rest2"), 150, "마지막 여유가 90분을 더 흡수해 60→150분");
+  assert.equal(boundaryMinutesToHHMM(byId(r, "rest2").end), "01:30", "빈 시간 없이 취침과 맞물린다");
+  // 오전 세그먼트는 취침 시각과 무관하게 그대로다.
+  assert.equal(minutesOf(r, "morning"), 60);
   assert.equal(r.adjustments.length, 0);
 });
 
 test("sleepMinutes를 넘기지 않으면 기본 취침(baseSleep) 그대로 계산된다", () => {
   const wakeMinutes = hhmmToBoundaryMinutes("08:00");
   const r = computeSchedule({ blocks: BASE_BLOCKS, settings: DEFAULT_SETTINGS, weekday: MON, wakeMinutes });
-  assert.equal(boundaryMinutesToHHMM(byId(r, "sleep").start), "00:30");
-  assert.equal(minutesOf(r, "rest"), 150);
+  assert.equal(boundaryMinutesToHHMM(byId(r, "sleep").start), "00:00");
+  assert.equal(minutesOf(r, "rest2"), 60);
 });
 
 test("반복 요일로 빠진 블록의 시간은 다음 여유 블록이 흡수해 취침 전 빈 시간이 남지 않는다", () => {
   // 화/목처럼 운동(월/수/금 전용)이 없는 날, 그 60분이 허공에 뜨지 않고
-  // 같은 세그먼트의 여유 블록(휴식)이 흡수해야 한다 — 실사용 중 "휴식이 23:30에
-  // 끝나는데 취침 00:30까지 빈 시간은 뭐냐"는 혼란으로 이어졌던 버그(회귀 방지).
+  // 같은 세그먼트의 여유 블록이 흡수해야 한다 — 실사용 중 "휴식이 23:00에
+  // 끝나는데 취침 00:00까지 빈 시간은 뭐냐"는 혼란으로 이어졌던 버그(회귀 방지).
   const wakeMinutes = hhmmToBoundaryMinutes("08:00");
   const r = computeSchedule({ blocks: BASE_BLOCKS, settings: DEFAULT_SETTINGS, weekday: TUE, wakeMinutes });
 
   assert.equal(byId(r, "exercise"), undefined, "화요일엔 운동이 없다");
-  assert.equal(minutesOf(r, "rest"), 210, "운동이 빠진 60분을 휴식이 흡수해 150→210분");
-  assert.equal(boundaryMinutesToHHMM(byId(r, "rest").end), "00:30", "빈 시간 없이 취침과 정확히 맞물린다");
-  assert.equal(boundaryMinutesToHHMM(byId(r, "sleep").start), "00:30");
+  assert.equal(minutesOf(r, "rest2"), 120, "운동이 빠진 60분을 마지막 여유가 흡수해 60→120분");
+  assert.equal(boundaryMinutesToHHMM(byId(r, "rest2").end), "00:00", "빈 시간 없이 취침과 정확히 맞물린다");
+  assert.equal(boundaryMinutesToHHMM(byId(r, "sleep").start), "00:00");
   assert.equal(r.adjustments.length, 0, "정상 기상일엔 확장이 조정 제안으로 뜨지 않는다");
 });
 
 test("우선순위를 뒤집으면(집필이 최우선으로 희생) 다른 블록이 대신 줄어든다", () => {
-  const wakeMinutes = hhmmToBoundaryMinutes("10:00");
+  // 09:00 기상 = 한 시간 부족. 기본 순서라면 여유 하나로 메워진다.
+  const wakeMinutes = hhmmToBoundaryMinutes("09:00");
+  const base = computeSchedule({ blocks: BASE_BLOCKS, settings: DEFAULT_SETTINGS, weekday: MON, wakeMinutes });
+  assert.equal(minutesOf(base, "buffer1"), 0, "기본 순서에선 여유가 먼저 사라진다");
+  assert.equal(minutesOf(base, "session1"), 120, "집필은 그대로");
+
   const reversedSettings = { ...DEFAULT_SETTINGS, reducePriority: ["집필", "작업", "운동", "여유"] };
   const r = computeSchedule({ blocks: BASE_BLOCKS, settings: reversedSettings, weekday: MON, wakeMinutes });
-
   assert.equal(minutesOf(r, "session1"), 60, "이번엔 집필이 먼저 최소치까지 줄어든다");
-  assert.equal(minutesOf(r, "buffer"), 120, "여유는 우선순위가 밀려 그대로 보존된다");
+  assert.equal(minutesOf(r, "buffer1"), 60, "여유는 우선순위가 밀려 그대로 보존된다");
 });
 
 test("점심 앵커를 12:30으로 옮기면 세그먼트 경계가 함께 이동한다", () => {
@@ -174,9 +207,9 @@ test("점심 앵커를 12:30으로 옮기면 세그먼트 경계가 함께 이�
   const r = computeSchedule({ blocks: movedLunchBlocks, settings: DEFAULT_SETTINGS, weekday: MON, wakeMinutes });
 
   assert.equal(boundaryMinutesToHHMM(byId(r, "lunch").start), "12:30");
-  // 오전 예산이 270분으로 줄어 여유가 120→90으로 30분만 흡수하면 된다.
-  assert.equal(minutesOf(r, "buffer"), 90);
-  assert.equal(minutesOf(r, "breakfast"), 60, "예산이 충분해 아침까지 건드릴 필요는 없다");
+  // 오전 예산이 270분으로 늘어 여유가 60→90으로 30분을 더 흡수한다.
+  assert.equal(minutesOf(r, "buffer1"), 90);
+  assert.equal(minutesOf(r, "morning"), 60, "예산이 충분해 준비 시간은 건드리지 않는다");
 });
 
 test("반복 요일: 운동은 화요일엔 아예 하루에서 빠진다", () => {
@@ -207,19 +240,19 @@ test("computeWakeMinutes: 보정 > 취침 기록 > 기본값 우선순위", () =
 });
 
 test("computeWakeMinutes: 저녁에 취침을 기록하면 1440분을 넘는 합도 하루 범위로 접힌다", () => {
-  // 22:00 취침 + 7.5시간 목표 = 다음날 05:30. 접지 않으면 1440을 넘는 원값(1530)이
-  // 그대로 반환되어, 점심(540)·취침(1230) 같은 [0,1440) 범위의 고정 앵커와 좌표계가
+  // 22:00 취침 + 8시간 목표 = 다음날 06:00. 접지 않으면 1440을 넘는 원값이
+  // 그대로 반환되어, 점심(480)·취침(1200) 같은 [0,1440) 범위의 고정 앵커와 좌표계가
   // 어긋나 하루 전체가 지워지는 버그가 났었다(회귀 방지).
   const baseWakeMinutes = hhmmToBoundaryMinutes("08:00");
   const bedAtMinutes = hhmmToBoundaryMinutes("22:00");
-  const wakeMinutes = computeWakeMinutes({ bedAtMinutes, wakeOverrideMinutes: null, sleepTargetMinutes: 450, baseWakeMinutes });
+  const wakeMinutes = computeWakeMinutes({ bedAtMinutes, wakeOverrideMinutes: null, sleepTargetMinutes: 480, baseWakeMinutes });
   assert.ok(wakeMinutes < 1440, "항상 [0, 1440) 범위여야 한다");
-  assert.equal(boundaryMinutesToHHMM(wakeMinutes), "05:30");
+  assert.equal(boundaryMinutesToHHMM(wakeMinutes), "06:00");
 
   const r = computeSchedule({ blocks: BASE_BLOCKS, settings: DEFAULT_SETTINGS, weekday: MON, wakeMinutes });
   assert.equal(r.warnings.length, 0, "정상적인 이른 기상이라 세그먼트 붕괴가 없어야 한다");
-  assert.equal(minutesOf(r, "breakfast"), 60, "이른 기상이라 아침이 삭제되지 않는다");
-  assert.equal(boundaryMinutesToHHMM(byId(r, "sleep").start), "00:30", "취침은 그대로 유지");
+  assert.equal(minutesOf(r, "morning"), 60, "준비 시간은 그대로다");
+  assert.equal(boundaryMinutesToHHMM(byId(r, "sleep").start), "00:00", "취침은 그대로 유지");
 });
 
 test("dateToBoundaryMinutes / logicalWeekday: 자정 넘긴 새벽엔 전날로 취급", () => {
@@ -283,7 +316,7 @@ test("applyVisibleOrder: 실제 BASE_BLOCKS에서 유동 블록만 뒤집어도 
   assert.equal(result[0], "wake");
   assert.equal(result[result.length - 1], "sleep");
   assert.equal(result.indexOf("lunch"), BASE_BLOCKS.findIndex((b) => b.id === "lunch"));
-  assert.ok(result.indexOf("buffer") < result.indexOf("session1"));
+  assert.ok(result.indexOf("buffer1") < result.indexOf("session1"));
 });
 
 // ---------------------------------------------------------------
@@ -340,15 +373,17 @@ test("앵커를 뒤집어도 유동 블록끼리의 순서는 사용자가 정�
   assert.equal(startOf(r, "lec2"), "15:00");
 });
 
-test("앵커가 하나뿐이면 정렬이 아무것도 바꾸지 않는다(기존 루틴 그대로)", () => {
+test("루틴 앵커들은 정렬을 거쳐도 제 시각 그대로다", () => {
   const r = computeSchedule({
     blocks: BASE_BLOCKS,
     settings: DEFAULT_SETTINGS,
     weekday: MON,
     wakeMinutes: at("08:00"),
   });
-  assert.equal(startOf(r, "lunch"), "13:00");
-  assert.equal(startOf(r, "sleep"), "00:30");
+  assert.equal(startOf(r, "lunch"), "12:00");
+  assert.equal(startOf(r, "dinner"), "18:00");
+  assert.equal(startOf(r, "exercise"), "21:00");
+  assert.equal(startOf(r, "sleep"), "00:00");
   assert.equal(r.adjustments.length, 0);
 });
 

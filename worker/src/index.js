@@ -9,12 +9,20 @@
  *                              항목마다 id와 done(완료 체크박스)이 붙는다.
  * GET  /week?start=YYYY-MM-DD  start부터 7일치를 날짜별로 담아서(주간 화면용).
  * PATCH /item  {id, done}      해당 노션 페이지의 "완료" 체크박스를 바꾼다.
+ * POST  /item  {db, date, ...} 일정/할일/과제나 소설 일정을 노션에 새로 만든다.
  *
  * 공개 PWA가 부르는 엔드포인트라 사용자 인증은 불가능하다. 대신
  * (1) CORS를 앱 도메인으로 고정하고 (2) PATCH 대상이 우리 두 DB에 속한
  * 최근 날짜 페이지인지 매번 다시 조회해서 확인한다. 그래서 최악의 경우도
  * "본인 오늘 할일 체크박스가 토글되는 것"에 그치고, 임의의 노션 페이지를
  * 건드리는 건 불가능하다.
+ *
+ * POST도 같은 강도로 막는다 — 인증이 없으니 **쓸 수 있는 모양 자체를 좁히는
+ * 것**이 방어책이다. 대상 DB는 "schedule"/"novel" 두 이름으로만 고르고 실제
+ * DB id는 env에서만 온다(클라이언트가 DB id를 보내지 못한다). 날짜는 PATCH와
+ * 같은 ±PATCH_DAY_WINDOW 안이어야 하고, 종류·유형은 허용 목록과 정확히
+ * 일치해야 하며, 그 밖의 속성은 아예 받지 않는다. 특히 "공휴일" 체크박스는
+ * 만들 수 없다 — 그건 연간 스크립트(update_holidays.py)의 몫이다.
  *
  * 환경변수: NOTION_TOKEN(secret), SCHEDULE_DB_ID, NOVEL_DB_ID, ALLOWED_ORIGIN
  */
@@ -31,10 +39,20 @@ const PATCH_DAY_WINDOW = 3;
 // /week가 한 번에 돌려주는 날짜 수.
 const WEEK_DAYS = 7;
 
+// POST /item으로 만들 수 있는 것의 전부. 여기 없는 DB도, 여기 없는 종류·유형도
+// 만들 수 없다. 노션 쪽 select 옵션을 늘렸다면 여기도 같이 늘려야 한다.
+const CREATABLE = {
+  schedule: { dbEnv: "SCHEDULE_DB_ID", prop: "종류", kinds: ["일정", "할일", "과제"] },
+  novel: { dbEnv: "NOVEL_DB_ID", prop: "유형", kinds: ["설정", "시놉시스", "트리트먼트", "초고", "퇴고", "연재"] },
+};
+
+/** 제목·작품 이름의 길이 상한. 노션 title은 훨씬 길어도 되지만 받을 이유가 없다. */
+const MAX_TEXT = 200;
+
 function corsHeaders(env) {
   return {
     "Access-Control-Allow-Origin": env.ALLOWED_ORIGIN || "*",
-    "Access-Control-Allow-Methods": "GET, PATCH, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, POST, PATCH, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type",
     "Access-Control-Max-Age": "86400",
     Vary: "Origin",
@@ -265,6 +283,69 @@ async function handleItem(request, env) {
   return json({ ok: true, id, done }, env);
 }
 
+/** 앱이 만든 항목을 노션 페이지로 남긴다. 받을 수 있는 모양은 CREATABLE이 전부다. */
+async function handleCreateItem(request, env) {
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return json({ error: "본문을 읽을 수 없습니다." }, env, 400);
+  }
+  const { db, date, name, kind, work, time } = body || {};
+
+  const spec = CREATABLE[db];
+  if (!spec) return json({ error: "db는 schedule 또는 novel이어야 합니다." }, env, 400);
+
+  const text = typeof name === "string" ? name.trim() : "";
+  if (!text || text.length > MAX_TEXT) return json({ error: "이름이 비었거나 너무 깁니다." }, env, 400);
+
+  if (!spec.kinds.includes(kind)) {
+    return json({ error: `${spec.prop}는 ${spec.kinds.join("/")} 중 하나여야 합니다.` }, env, 400);
+  }
+
+  if (typeof date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return json({ error: "날짜 형식이 잘못되었습니다." }, env, 400);
+  }
+  // 체크와 같은 범위. "오늘 할 일을 적는다"가 이 앱의 쓰임이라 그 밖으로 나갈 이유가 없다.
+  const today = todayKST();
+  if (date < shiftDate(today, -PATCH_DAY_WINDOW) || date > shiftDate(today, PATCH_DAY_WINDOW)) {
+    return json({ error: "이 앱이 다룰 수 있는 날짜가 아닙니다." }, env, 403);
+  }
+
+  if (time != null && time !== "" && !/^\d{2}:\d{2}$/.test(time)) {
+    return json({ error: "시각 형식이 잘못되었습니다." }, env, 400);
+  }
+  // 시각을 붙일 땐 KST 오프셋을 명시한다. 안 붙이면 노션이 UTC로 읽어 아홉 시간이 밀린다.
+  const start = time ? `${date}T${time}:00+09:00` : date;
+
+  const properties = {
+    이름: { title: [{ text: { content: text } }] },
+    날짜: { date: { start } },
+    [spec.prop]: { select: { name: kind } },
+  };
+  if (db === "novel") {
+    const workName = typeof work === "string" ? work.trim() : "";
+    if (workName.length > MAX_TEXT) return json({ error: "작품 이름이 너무 깁니다." }, env, 400);
+    if (workName) properties["작품"] = { select: { name: workName } };
+  }
+
+  const res = await fetch(`${NOTION_API}/pages`, {
+    method: "POST",
+    headers: notionHeaders(env),
+    body: JSON.stringify({ parent: { database_id: env[spec.dbEnv] }, properties }),
+  });
+  if (!res.ok) {
+    const detail = await res.text();
+    return json({ error: `노션 생성 실패(${res.status})`, detail }, env, 502);
+  }
+  const page = await res.json();
+
+  // 목록에 그대로 꽂을 수 있도록 조회 결과와 같은 모양으로 돌려준다.
+  const data = db === "novel" ? buildTodayData(date, [], [page]) : buildTodayData(date, [page], []);
+  const list = db === "novel" ? "novel_items" : kind === "일정" ? "special_items" : "todo_items";
+  return json({ ok: true, list, item: data[list][0] }, env);
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -279,6 +360,7 @@ export default {
       if (request.method === "GET" && url.pathname === "/today") return await handleToday(request, env);
       if (request.method === "GET" && url.pathname === "/week") return await handleWeek(request, env);
       if (request.method === "PATCH" && url.pathname === "/item") return await handleItem(request, env);
+      if (request.method === "POST" && url.pathname === "/item") return await handleCreateItem(request, env);
     } catch (e) {
       return json({ error: String(e && e.message ? e.message : e) }, env, 502);
     }

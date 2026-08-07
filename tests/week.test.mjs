@@ -6,7 +6,8 @@ import assert from "node:assert/strict";
 
 import { weekdayOfKey, weekStartKey, shortDateLabel, buildWeekDays, WEEK_DAYS } from "../docs/week.js";
 import { parseLectures } from "../docs/lectures.js";
-import { BASE_BLOCKS, DEFAULT_SETTINGS, boundaryMinutesToHHMM, hhmmToBoundaryMinutes } from "../docs/routine.js";
+import { BASE_BLOCKS, SEMESTER_BLOCKS, DEFAULT_SETTINGS, boundaryMinutesToHHMM } from "../docs/routine.js";
+import { SEMESTER, TIMETABLE } from "../docs/semester-2026-2.js";
 
 // --- 날짜 계산 --------------------------------------------------------------
 
@@ -40,14 +41,12 @@ const 시간표 = parseLectures(
 
 const 학기 = { start: "2026-03-02", end: "2026-06-21" };
 
-// 점심 13:00이 월요일 13:00 강의와 겹치므로, 실제 복학 상황처럼 점심을 옮겨 둔다.
-const 루틴 = BASE_BLOCKS.map((b) => (b.id === "lunch" ? { ...b, fixedAt: hhmmToBoundaryMinutes("12:00") } : b));
-
 const build = (over = {}) =>
   buildWeekDays({
     startKey: "2026-03-09", // 학기 중의 월요일
     data: null,
-    blocks: 루틴,
+    blocks: BASE_BLOCKS,
+    semesterBlocks: SEMESTER_BLOCKS,
     settings: DEFAULT_SETTINGS,
     lectures: 시간표,
     semester: 학기,
@@ -146,6 +145,41 @@ test("하루가 눌리지 않는다 — 강의를 낀 날도 취침까지 이어
   const days = build();
   days.forEach((d) => {
     const sleep = d.blocks.find((b) => b.anchor === "sleep");
-    assert.equal(boundaryMinutesToHHMM(sleep.start), "00:30", `${d.dateKey}의 취침`);
+    assert.equal(boundaryMinutesToHHMM(sleep.start), "00:00", `${d.dateKey}의 취침`);
   });
+});
+
+// --- 개강 경계 주 -----------------------------------------------------------
+
+test("개강 주는 같은 주 안에서 방학 루틴과 학기 루틴이 갈린다", () => {
+  // 2026-08-31(월) 개강. 그 전 주는 통째로 방학이고, 개강 주는 통째로 학기다.
+  const 개강주 = buildWeekDays({
+    startKey: "2026-08-31",
+    data: null,
+    blocks: BASE_BLOCKS,
+    semesterBlocks: SEMESTER_BLOCKS,
+    settings: DEFAULT_SETTINGS,
+    lectures: parseLectures(TIMETABLE).lectures,
+    semester: SEMESTER,
+    todayKey: "2026-08-31",
+    todayBlocks: null,
+  });
+  const 이름들 = (d) => d.blocks.filter((b) => b.category === "집필" && b.minutes > 0).map((b) => b.name);
+
+  assert.deepEqual(이름들(개강주[0]), ["집필", "집필"], "개강일 월요일은 학기 루틴(집필 두 번)");
+  assert.deepEqual(개강주[1].lectures.map((b) => b.name), ["문장실습Ⅱ", "크리틱Ⅳ"], "화요일 강의가 붙는다");
+
+  const 방학주 = buildWeekDays({
+    startKey: "2026-08-24",
+    data: null,
+    blocks: BASE_BLOCKS,
+    semesterBlocks: SEMESTER_BLOCKS,
+    settings: DEFAULT_SETTINGS,
+    lectures: parseLectures(TIMETABLE).lectures,
+    semester: SEMESTER,
+    todayKey: "2026-08-24",
+    todayBlocks: null,
+  });
+  assert.deepEqual(방학주.flatMap((d) => d.lectures), [], "개강 전 주엔 강의가 없다");
+  assert.deepEqual(이름들(방학주[1]), ["1차 집필", "2차 집필", "3차 집필"], "화요일도 방학 루틴 그대로");
 });

@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 
 import {
   store, setStore, defaultStore, migrate, rolloverIfStale, emptySleep, nextDateKey,
-  rememberMeal, shiftDateKey, MEAL_HISTORY_DAYS,
+  rememberMeal, shiftDateKey, MEAL_HISTORY_DAYS, activeBlocks, activeBlocksKey,
 } from "../docs/store.js";
 import { logicalDateKey } from "../docs/routine.js";
 
@@ -26,7 +26,7 @@ function freshStore() {
 test("migrate: 빈 객체/null/이상한 값이 와도 기본 저장소 모양이 나온다", () => {
   for (const bad of [{}, null, undefined, [], "문자열", 42]) {
     const s = migrate(bad);
-    assert.equal(s.version, 1);
+    assert.equal(s.version, 2);
     assert.equal(typeof s.settings.dayBoundaryHour, "number");
     assert.ok(Array.isArray(s.blocks) && s.blocks.length > 0, `blocks가 살아있어야 한다: ${JSON.stringify(bad)}`);
     assert.deepEqual(s.today, emptySleep());
@@ -42,11 +42,77 @@ test("migrate: 설정은 병합하고 모르는 키는 그대로 둔다", () => 
 });
 
 test("migrate: 빈 blocks 배열은 기본 루틴으로 되돌린다", () => {
-  assert.ok(migrate({ blocks: [] }).blocks.length > 0);
-  assert.ok(migrate({ blocks: "블록아님" }).blocks.length > 0);
+  assert.ok(migrate({ version: 2, blocks: [] }).blocks.length > 0);
+  assert.ok(migrate({ version: 2, blocks: "블록아님" }).blocks.length > 0);
 
   const mine = [{ id: "x", name: "내 블록", category: "집필", minutes: 60 }];
-  assert.deepEqual(migrate({ blocks: mine }).blocks, mine, "내용이 있으면 그대로 쓴다");
+  assert.deepEqual(migrate({ version: 2, blocks: mine }).blocks, mine, "내용이 있으면 그대로 쓴다");
+});
+
+// --- v1 → v2: 2026년 2학기 개편 ---------------------------------------------
+
+test("v1 저장본은 루틴을 통째로 새것으로 갈아끼운다", () => {
+  // 여기서만 "손봐온 루틴은 지킨다"는 원칙을 일부러 어긴다 — 루틴 자체를
+  // 갈아엎는 것이 이 마이그레이션의 목적이다.
+  const old = {
+    version: 1,
+    blocks: [{ id: "breakfast", name: "아침 식사", category: "식사", minutes: 60 }],
+    settings: { baseWake: "07:30", baseSleep: "00:30", sleepTargetMinutes: 450, dropBreakfastWhenLate: true, semesterMeals: { lunch: "12:00" } },
+    mealPool: { breakfast: ["토스트"], lunch: ["김치찌개"], dinner: [] },
+    meals: { date: "2026-08-06", byBlockId: { breakfast: "토스트", lunch: "김밥" } },
+  };
+  const s = migrate(old);
+
+  assert.equal(s.version, 2);
+  assert.equal(s.blocks.find((b) => b.id === "breakfast"), undefined, "아침 식사는 사라진다");
+  assert.ok(s.blocks.find((b) => b.id === "morning"), "준비 여유가 들어온다");
+  assert.ok(Array.isArray(s.semesterBlocks) && s.semesterBlocks.length, "학기 루틴이 생긴다");
+
+  assert.equal(s.settings.baseWake, "07:30", "기상 시각처럼 사용자가 정한 값은 지킨다");
+  assert.equal(s.settings.baseSleep, "00:00", "취침과 수면 목표는 새 기준으로 덮는다");
+  assert.equal(s.settings.sleepTargetMinutes, 480);
+  assert.equal(s.settings.semesterMeals, undefined);
+  assert.equal(s.settings.dropBreakfastWhenLate, undefined);
+
+  assert.equal(s.mealPool.breakfast, undefined, "아침 후보 목록도 없앤다");
+  assert.deepEqual(s.mealPool.lunch, ["김치찌개"], "나머지 끼니는 그대로");
+  assert.equal(s.meals.byBlockId.breakfast, undefined);
+  assert.equal(s.meals.byBlockId.lunch, "김밥");
+});
+
+test("v1 저장본에 이미 적어둔 시간표·학기는 건드리지 않는다", () => {
+  const mine = [{ id: "lec-0-0900", name: "내 강의", days: [0], start: "09:00", minutes: 60 }];
+  const s = migrate({ version: 1, lectures: mine, semester: { start: "2026-03-02", end: "2026-06-21" } });
+  assert.deepEqual(s.lectures, mine);
+  assert.deepEqual(s.semester, { start: "2026-03-02", end: "2026-06-21" });
+});
+
+test("v1 저장본에 시간표가 없으면 이번 학기 것을 넣어준다", () => {
+  const s = migrate({ version: 1 });
+  assert.equal(s.lectures.length, 8, "2026-2학기 여덟 줄");
+  assert.deepEqual(s.semester, { start: "2026-08-31", end: "2026-12-18" });
+});
+
+test("이미 v2인 저장본은 다시 갈아엎지 않는다", () => {
+  const mine = [{ id: "x", name: "내 블록", category: "집필", minutes: 60 }];
+  const s = migrate({ version: 2, blocks: mine, settings: { baseSleep: "01:00" } });
+  assert.deepEqual(s.blocks, mine);
+  assert.equal(s.settings.baseSleep, "01:00", "한 번 지난 마이그레이션이 다시 덮으면 안 된다");
+});
+
+test("activeBlocks: 학기 안이면 학기 루틴, 방학이면 방학 루틴", () => {
+  setStore(defaultStore());
+  assert.equal(activeBlocks("2026-08-20"), store.blocks, "개강 전");
+  assert.equal(activeBlocks("2026-08-31"), store.semesterBlocks, "개강일 포함");
+  assert.equal(activeBlocks("2026-12-18"), store.semesterBlocks, "종강일 포함");
+  assert.equal(activeBlocks("2026-12-19"), store.blocks, "종강 다음날");
+  assert.equal(activeBlocksKey("2026-09-07"), "semesterBlocks");
+  assert.equal(activeBlocksKey("2026-08-20"), "blocks");
+});
+
+test("activeBlocks: 학기 기간을 안 적었으면 방학 루틴", () => {
+  setStore({ ...defaultStore(), semester: { start: null, end: null } });
+  assert.equal(activeBlocks("2026-09-07"), store.blocks);
 });
 
 test("migrate: novelAssign.excluded가 배열이 아니면 빈 배열로 고친다", () => {
@@ -196,7 +262,7 @@ test("shiftDateKey: 앞뒤로 옮기고 월·연 경계를 넘는다", () => {
 
 test("migrate: 식단 필드가 없는 옛 저장본도 안전하게 채운다", () => {
   const s = migrate({});
-  assert.deepEqual(s.mealPool, { breakfast: [], lunch: [], dinner: [] });
+  assert.deepEqual(s.mealPool, { lunch: [], dinner: [] });
   assert.deepEqual(s.meals, { date: null, byBlockId: {} });
   assert.deepEqual(s.mealHistory, []);
 });
@@ -205,7 +271,6 @@ test("migrate: 후보 목록에서 문자열이 아닌 것과 빈 값을 걸러�
   const s = migrate({ mealPool: { lunch: ["김치찌개", "", "  ", 42, null, "된장찌개"], dinner: "배열아님" } });
   assert.deepEqual(s.mealPool.lunch, ["김치찌개", "된장찌개"]);
   assert.deepEqual(s.mealPool.dinner, []);
-  assert.deepEqual(s.mealPool.breakfast, []);
 });
 
 test("migrate: 망가진 식사 기록 항목은 버린다", () => {

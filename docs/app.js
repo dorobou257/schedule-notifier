@@ -21,6 +21,8 @@ import {
   shiftDateKey,
   emptySleep,
   nextDateKey,
+  activeBlocks,
+  activeBlocksKey,
 } from "./store.js";
 import {
   novelKey,
@@ -37,7 +39,6 @@ import {
   LECTURE_CATEGORY,
   lectureBlocks,
   computeDayWithLectures,
-  applySemesterMealTimes,
   parseLectures,
   formatLectureLine,
   isWithinSemester,
@@ -137,9 +138,9 @@ function getSleepOverrideMinutes(now, dayBoundaryHour) {
 // 세 끼에만 붙는다 — "아침 후보"가 없는 끼니에 추천을 하라고 할 수는 없다.
 // ---------------------------------------------------------------
 
-const MEAL_SLOTS = { breakfast: "아침", lunch: "점심", dinner: "저녁" };
-// 고정을 처음 켤 때 채워줄 시각. 아무 값이나 넣으면 아침을 13:00으로 잡아버린다.
-const MEAL_DEFAULT_TIME = { breakfast: "08:00", lunch: "13:00", dinner: "18:00" };
+const MEAL_SLOTS = { lunch: "점심", dinner: "저녁" };
+// 고정을 처음 켤 때 채워줄 시각. 아무 값이나 넣으면 점심을 18:00으로 잡아버린다.
+const MEAL_DEFAULT_TIME = { lunch: "12:00", dinner: "18:00" };
 
 /** 이 블록이 식단을 적을 수 있는 식사 블록인지. */
 function isMealBlock(b) {
@@ -202,9 +203,14 @@ function todayLectures(now, dayBoundaryHour) {
   }).filter((b) => !skipped.has(b.id));
 }
 
-/** 오늘이 학기 안인지. 학기 중에만 쓰는 식사 시각을 적용할지 가른다. */
+/** 오늘이 학기 안인지. */
 function inSemesterToday(now, dayBoundaryHour) {
   return isWithinSemester(logicalDateKey(now, dayBoundaryHour), store.semester);
+}
+
+/** 오늘 적용되는 루틴 배열(방학용/학기용). */
+function todayBlocks(now, dayBoundaryHour) {
+  return activeBlocks(logicalDateKey(now, dayBoundaryHour));
 }
 
 /** 오늘만 시각 고정을 푼 블록 id 집합. 취침(sleep)은 절대 여기 들어오지 않는다 —
@@ -224,9 +230,7 @@ function computeForToday(now, protectedIds) {
   // 오늘만 성격을 바꾼 블록(집필↔작업)을 여기서 갈아끼운다 — 루틴 자체는 건드리지 않는다.
   const swaps = store.dayTweaks.categories || {};
   const unpinned = unpinnedToday();
-  const routine = inSemesterToday(now, dayBoundaryHour)
-    ? applySemesterMealTimes(store.blocks, store.settings.semesterMeals, dayBoundaryHour)
-    : store.blocks;
+  const routine = todayBlocks(now, dayBoundaryHour);
   const blocks = routine.map((b) => {
     const category = swaps[b.id] && swaps[b.id] !== b.category ? swaps[b.id] : null;
     const unpin = unpinned.has(b.id) && b.anchor === "clock";
@@ -239,15 +243,11 @@ function computeForToday(now, protectedIds) {
     }
     return next;
   });
-  const settings = {
-    ...store.settings,
-    dropBreakfastWhenLate: overrides.has("breakfast") ? false : store.settings.dropBreakfastWhenLate,
-  };
-  // 강의는 끼워 넣는 게 아니라 그 자리의 집필·작업을 대신한다(computeDayWithLectures).
+  // 강의는 끼워 넣는 게 아니라 강의가 비워둔 자리에 집필·작업을 채운다(placement.js).
   const result = computeDayWithLectures({
     blocks,
     lectures: todayLectures(now, dayBoundaryHour),
-    settings,
+    settings: store.settings,
     weekday,
     wakeMinutes,
     sleepMinutes,
@@ -347,7 +347,9 @@ function readPending() {
   try {
     const raw = localStorage.getItem(PENDING_KEY);
     const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed : [];
+    if (!Array.isArray(parsed)) return [];
+    // kind가 없던 시절엔 완료 체크만 쌓였다 — 그때 저장분은 전부 patch다.
+    return parsed.map((p) => (p && p.kind ? p : { kind: "patch", id: p?.id, done: !!p?.done }));
   } catch {
     return [];
   }
@@ -362,9 +364,14 @@ function writePending(list) {
 }
 
 function queuePending(id, done) {
-  const list = readPending().filter((p) => p.id !== id);
-  list.push({ id, done });
+  // 같은 항목을 여러 번 토글했으면 마지막 상태만 보내면 된다.
+  const list = readPending().filter((p) => !(p.kind === "patch" && p.id === id));
+  list.push({ kind: "patch", id, done });
   writePending(list);
+}
+
+function queueCreate(payload) {
+  writePending([...readPending(), { kind: "create", payload }]);
 }
 
 async function patchNotion(id, done) {
@@ -377,7 +384,25 @@ async function patchNotion(id, done) {
   if (!res.ok) throw new Error("patch " + res.status);
 }
 
-/** 밀린 체크를 순서대로 보낸다. 하나라도 실패하면 그것부터 다시 큐에 남긴다. */
+/** 노션에 페이지를 만든다. @returns 워커가 돌려준 { list, item } */
+async function createNotion(payload) {
+  const res = await fetch(`${WORKER_URL.replace(/\/$/, "")}/item`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(PATCH_TIMEOUT_MS),
+  });
+  if (!res.ok) {
+    const err = new Error("create " + res.status);
+    // 400/403은 다시 보내도 같은 답이 온다(형식이 틀렸거나 날짜 범위 밖).
+    // 큐에 남겨두면 앱을 열 때마다 영영 재시도한다 — 그런 건 버린다.
+    err.permanent = res.status >= 400 && res.status < 500;
+    throw err;
+  }
+  return res.json();
+}
+
+/** 밀린 것들을 순서대로 보낸다. 하나라도 실패하면 그것부터 다시 큐에 남긴다. */
 async function flushPendingChecks() {
   if (!WORKER_URL) return;
   const list = readPending();
@@ -385,9 +410,10 @@ async function flushPendingChecks() {
   const remaining = [];
   for (const item of list) {
     try {
-      await patchNotion(item.id, item.done);
-    } catch {
-      remaining.push(item);
+      if (item.kind === "create") await createNotion(item.payload);
+      else await patchNotion(item.id, item.done);
+    } catch (e) {
+      if (!e?.permanent) remaining.push(item);
     }
   }
   writePending(remaining);
@@ -580,10 +606,8 @@ function renderMain(now) {
 
   // 할일도 소설 일정도, 완료한 것을 목록에서 지우지 않는다 — 지워버리면
   // 잘못 눌렀을 때 되돌릴 방법이 없다. 체크된 채로 남겨둔다.
-  const todos = d.todo_items || [];
-  if (todos.length) {
-    app.appendChild(card(ICONS.check, "오늘의 할일", todos, "todo"));
-  }
+  // 비어 있어도 카드를 남긴다 — 머리글의 + 버튼이 항목을 만드는 유일한 입구다.
+  app.appendChild(card(ICONS.check, "오늘의 할일", d.todo_items || [], "todo"));
   app.appendChild(card(ICONS.book, "오늘의 소설 일정", d.novel_items || [], "novel"));
 }
 
@@ -811,11 +835,14 @@ function renderAgenda(now) {
       (order, movedId) => {
         // 시각이 고정된 블록을 직접 끌었다면 오늘 하루만 그 고정을 푼다.
         // 점심 시간을 강의에 맞춰 옮기거나, 휴강한 강의를 치울 때 쓰는 동작이다.
-        const moved = store.blocks.find((b) => b.id === movedId);
+        // 순서 편집은 "오늘 적용 중인 루틴"에만 반영한다 — 학기 중에 옮긴 순서가
+        // 방학 루틴까지 흔들면 안 된다.
+        const key = activeBlocksKey(logicalDateKey(new Date(), store.settings.dayBoundaryHour));
+        const moved = store[key].find((b) => b.id === movedId);
         if (moved && moved.anchor === "clock" && !unpinned.has(movedId)) {
           store.dayTweaks.unpinned = [...(store.dayTweaks.unpinned || []), movedId];
         }
-        store.blocks = applyVisibleOrder(store.blocks, order);
+        store[key] = applyVisibleOrder(store[key], order);
         saveStore(true);
         // 안착 애니메이션이 끝난 뒤에 다시 그린다 — 곧바로 갈아끼우면
         // 블록이 제자리로 스르륵 돌아가는 모습이 잘려버린다.
@@ -865,6 +892,11 @@ function card(iconHtml, title, items, sectionType) {
   const pending = items.filter((it) => !it.done).length;
   const countText = pending === items.length ? `${items.length}건` : `${pending}/${items.length}건`;
   head.appendChild(el("span", { className: "count", textContent: countText }));
+  if (sectionType === "todo" || sectionType === "novel") {
+    const add = el("button", { className: "card-add", title: "항목 추가", innerHTML: ICONS.plus });
+    add.addEventListener("click", () => openCreateSheet(sectionType));
+    head.appendChild(add);
+  }
   section.appendChild(head);
 
   if (items.length) {
@@ -1411,7 +1443,9 @@ function undoToday() {
 
 function openEditorSheet() {
   state.activeSheet = "editor";
-  state.editorBlocks = store.blocks.map((b) => ({ ...b }));
+  // 방학 루틴과 학기 루틴은 별개다. 지금 보고 있는 하루의 루틴을 연다.
+  state.editorKey = activeBlocksKey(logicalDateKey(new Date(), store.settings.dayBoundaryHour));
+  state.editorBlocks = store[state.editorKey].map((b) => ({ ...b }));
   renderEditor();
 }
 
@@ -1456,7 +1490,7 @@ function renderEditor() {
 
   const saveBtn = el("button", { className: "btn btn--primary", textContent: "저장" });
   saveBtn.addEventListener("click", () => {
-    store.blocks = state.editorBlocks;
+    store[state.editorKey] = state.editorBlocks;
     saveStore(true);
     closeSheet();
     renderShell();
@@ -1464,7 +1498,13 @@ function renderEditor() {
   const cancelBtn = el("button", { className: "btn btn--ghost", textContent: "취소" });
   cancelBtn.addEventListener("click", closeSheet);
 
-  openSheet("루틴 편집", "블록을 눌러 세부 사항을 바꾸거나, 잡고 끌어서 순서를 바꾸세요.", [validation, list, addBtn, presetsBlock], [cancelBtn, saveBtn]);
+  const which = state.editorKey === "semesterBlocks" ? "학기 루틴" : "방학 루틴";
+  openSheet(
+    `루틴 편집 · ${which}`,
+    "블록을 눌러 세부 사항을 바꾸거나, 잡고 끌어서 순서를 바꾸세요.",
+    [validation, list, addBtn, presetsBlock],
+    [cancelBtn, saveBtn]
+  );
 }
 
 function blockItem(b) {
@@ -1586,6 +1626,120 @@ function selectField(options, current) {
     select.appendChild(opt);
   });
   return select;
+}
+
+// ---- 항목 추가 시트 (노션에 페이지를 만든다) ----
+
+// 워커의 CREATABLE과 같은 목록이어야 한다. 여기 없는 값을 보내면 400으로 막힌다.
+const CREATE_KINDS = {
+  todo: ["할일", "과제", "일정"],
+  novel: ["초고", "퇴고", "트리트먼트", "시놉시스", "설정", "연재"],
+};
+
+/** 워커 응답의 항목이 들어갈 자리. 낙관적 반영과 교체 모두 이 키를 쓴다. */
+function listKeyFor(sectionType, kind) {
+  if (sectionType === "novel") return "novel_items";
+  return kind === "일정" ? "special_items" : "todo_items";
+}
+
+/** 화면에 이미 있는 소설 항목들에서 작품 이름 후보를 모은다. */
+function knownWorks() {
+  const seen = new Set();
+  ((state.todayData || {}).novel_items || []).forEach((it) => {
+    const w = (it.tags || [])[0];
+    if (w) seen.add(w);
+  });
+  return [...seen];
+}
+
+/**
+ * 할일·과제·일정이나 소설 일정을 노션에 새로 만든다.
+ *
+ * 화면에는 먼저 꽂고(낙관적) 워커가 돌려준 진짜 페이지 id로 갈아끼운다 —
+ * 그래야 방금 만든 항목의 완료 체크가 곧바로 동작한다. 워커가 없거나 실패하면
+ * 큐에 쌓아두고, id가 없는 채로 남아 체크박스만 붙지 않는다.
+ */
+function openCreateSheet(sectionType) {
+  state.activeSheet = "create";
+  const isNovel = sectionType === "novel";
+  const todayKey = logicalDateKey(new Date(), store.settings.dayBoundaryHour);
+
+  const nameInput = el("input", { type: "text", placeholder: isNovel ? "예) 3화 초고" : "예) 과제 제출" });
+  const kindSelect = selectField(CREATE_KINDS[sectionType], CREATE_KINDS[sectionType][0]);
+  const dateInput = el("input", { type: "date", value: todayKey });
+  const timeInput = el("input", { type: "time", value: "" });
+
+  const body = [fieldRow("이름", nameInput), fieldRow(isNovel ? "유형" : "종류", kindSelect)];
+
+  let workInput = null;
+  if (isNovel) {
+    workInput = el("input", { type: "text", placeholder: "작품 이름" });
+    // input.list는 읽기 전용이라 프로퍼티로는 못 붙인다.
+    workInput.setAttribute("list", "work-suggest");
+    const datalist = el("datalist", { id: "work-suggest" });
+    knownWorks().forEach((w) => datalist.appendChild(el("option", { value: w })));
+    body.push(fieldRow("작품", workInput), datalist);
+  }
+  body.push(fieldRow("날짜", dateInput), fieldRow("시각(선택)", timeInput));
+  body.push(el("p", { className: "sheet-note", textContent: "노션에도 같은 항목이 만들어집니다. 연결이 안 되면 다음에 열 때 다시 보냅니다." }));
+
+  const saveBtn = el("button", { className: "btn btn--primary", textContent: "추가" });
+  saveBtn.addEventListener("click", async () => {
+    const name = nameInput.value.trim();
+    if (!name) {
+      nameInput.focus();
+      return;
+    }
+    const kind = kindSelect.value;
+    const payload = {
+      db: isNovel ? "novel" : "schedule",
+      date: dateInput.value || todayKey,
+      name,
+      kind,
+      ...(isNovel && workInput.value.trim() ? { work: workInput.value.trim() } : {}),
+      ...(timeInput.value ? { time: timeInput.value } : {}),
+    };
+    closeSheet();
+    await addItem(sectionType, payload);
+  });
+  const cancelBtn = el("button", { className: "btn btn--ghost", textContent: "취소" });
+  cancelBtn.addEventListener("click", closeSheet);
+
+  openSheet(isNovel ? "소설 일정 추가" : "할일 추가", null, body, [cancelBtn, saveBtn]);
+}
+
+async function addItem(sectionType, payload) {
+  const listKey = listKeyFor(sectionType, payload.kind);
+  const local = {
+    id: null,
+    time: payload.time || "",
+    tags: sectionType === "novel" ? [payload.work || "", payload.kind] : [payload.kind],
+    text: payload.name,
+    done: false,
+  };
+  if (payload.kind === "일정") delete local.tags;
+
+  if (!state.todayData) state.todayData = {};
+  state.todayData[listKey] = [...(state.todayData[listKey] || []), local];
+  renderShell();
+
+  if (!WORKER_URL) return; // 워커가 없으면 이 기기에만 남는다
+  try {
+    const res = await createNotion(payload);
+    // 낙관적으로 꽂아둔 자리를 워커가 돌려준 진짜 항목으로 갈아끼운다.
+    const list = state.todayData[res.list] || [];
+    const at = list.indexOf(local);
+    if (at >= 0) list[at] = res.item;
+    else state.todayData[res.list] = [...list, res.item];
+  } catch (e) {
+    if (e?.permanent) {
+      setStatus("노션이 받지 못한 항목입니다. 날짜와 종류를 확인해 주세요.");
+    } else {
+      queueCreate(payload);
+      setStatus("노션에 바로 반영하지 못했습니다. 다음에 열 때 다시 시도합니다.");
+    }
+  }
+  renderShell();
 }
 
 /** 오늘 이 강의가 없다고(휴강·공강) 표시하는 시트. 내일은 원래대로 돌아온다. */
@@ -1714,7 +1868,8 @@ function openCategorySwapSheet(blockId) {
   const b = state.computed.blocks.find((x) => x.id === blockId);
   if (!b) return;
   const other = b.category === "집필" ? "작업" : "집필";
-  const original = (store.blocks.find((x) => x.id === blockId) || {}).category;
+  const routine = todayBlocks(new Date(), store.settings.dayBoundaryHour);
+  const original = (routine.find((x) => x.id === blockId) || {}).category;
 
   const apply = (category) => {
     const categories = { ...store.dayTweaks.categories };
@@ -1792,7 +1947,8 @@ function openSettingsSheet() {
 function renderSettings() {
   const s = store.settings;
 
-  const editRoutineBtn = el("button", { className: "btn btn--ghost btn--block", textContent: "루틴 편집 열기" });
+  const editing = activeBlocksKey(logicalDateKey(new Date(), s.dayBoundaryHour)) === "semesterBlocks" ? "학기 루틴" : "방학 루틴";
+  const editRoutineBtn = el("button", { className: "btn btn--ghost btn--block", textContent: `루틴 편집 열기 (오늘은 ${editing})` });
   editRoutineBtn.addEventListener("click", () => {
     closeSheet();
     openEditorSheet();
@@ -1801,16 +1957,12 @@ function renderSettings() {
   const baseWakeInput = el("input", { type: "time", value: s.baseWake });
   const baseSleepInput = el("input", { type: "time", value: s.baseSleep });
   const sleepTargetInput = el("input", { type: "number", value: Math.round(s.sleepTargetMinutes / 60 * 10) / 10, step: 0.5, min: 4, max: 12 });
-  const dropBreakfastInput = el("input", { type: "checkbox", checked: s.dropBreakfastWhenLate });
 
   const basics = el("div", { className: "settings-group" });
   basics.appendChild(el("h3", { textContent: "기준 시각" }));
   basics.appendChild(fieldRow("기본 기상", baseWakeInput));
   basics.appendChild(fieldRow("기본 취침", baseSleepInput));
   basics.appendChild(fieldRow("목표 수면 시간(시간)", sleepTargetInput));
-  const dropRow = fieldRow("기상이 늦으면 아침 식사 자동 삭제", dropBreakfastInput);
-  dropRow.classList.add("inline");
-  basics.appendChild(dropRow);
 
   // --- 강의 시간표 ---
   // 에브리타임은 공개 API가 없고 공유 페이지도 로그인 세션이 필요해서 워커가
@@ -1856,8 +2008,8 @@ function renderSettings() {
   showLectureStatus();
 
   // --- 식사 시간 ---
-  // 지금까진 점심만 13:00으로 박혀 있었다. 복학하면 강의에 맞춰 세 끼가 전부
-  // 움직여야 하므로, 블록 편집을 열지 않고 여기서 바로 고칠 수 있게 한다.
+  // 점심 12:00 · 저녁 18:00은 방학과 학기가 같다. 그래서 여기서 고치면 두 루틴
+  // 모두에 반영한다 — 학기용 시각을 따로 두던 칸은 없앴다.
   const mealGroup = el("div", { className: "settings-group" });
   mealGroup.appendChild(el("h3", { textContent: "식사 시간" }));
   const mealTimeInputs = [];
@@ -1887,26 +2039,7 @@ function renderSettings() {
   mealGroup.appendChild(
     el("p", {
       className: "sheet-note",
-      textContent: "고정을 끄면 앞뒤 블록에 맞춰 흘러갑니다. 오늘 하루만 옮기려면 '오늘 하루'에서 블록을 끌어보세요.",
-    })
-  );
-
-  // 학기 중에만 다른 시각. 점심 13:00이 13:00 강의와 부딪히지만, 그렇다고
-  // 방학에도 12:00에 먹을 이유는 없어서 두 벌을 따로 둔다.
-  mealGroup.appendChild(el("h4", { textContent: "학기 중에는 다르게" }));
-  const semesterMealInputs = [];
-  Object.entries(MEAL_SLOTS).forEach(([id, label]) => {
-    const time = el("input", { type: "time", value: (s.semesterMeals || {})[id] || "" });
-    const row = el("div", { className: "field-row field-row--meal" });
-    row.appendChild(el("label", { textContent: `${label} 시각` }));
-    row.appendChild(time);
-    mealGroup.appendChild(row);
-    semesterMealInputs.push({ id, time });
-  });
-  mealGroup.appendChild(
-    el("p", {
-      className: "sheet-note",
-      textContent: "비워두면 위 시각을 그대로 씁니다. 위의 학기 기간 안에 있는 날에만 적용됩니다.",
+      textContent: "방학·학기 루틴 모두에 적용됩니다. 오늘 하루만 옮기려면 '오늘 하루'에서 블록을 끌어보세요.",
     })
   );
 
@@ -2004,7 +2137,6 @@ function renderSettings() {
     s.baseWake = baseWakeInput.value || s.baseWake;
     s.baseSleep = baseSleepInput.value || s.baseSleep;
     s.sleepTargetMinutes = Math.round(Number(sleepTargetInput.value) * 60) || s.sleepTargetMinutes;
-    s.dropBreakfastWhenLate = dropBreakfastInput.checked;
     s.reducePriority = order;
 
     // 강의 시간표. 읽지 못한 줄은 버리지 않고 그대로 두어(저장 안 함) 사용자가
@@ -2014,21 +2146,21 @@ function renderSettings() {
     store.semester = { start: semStart.value || null, end: semEnd.value || null };
 
     // 식사 시각 고정은 블록 자체를 고치는 일이라 설정 저장과 함께 반영한다.
+    // 방학 루틴과 학기 루틴 양쪽에 같이 적용한다 — 끼니 시각까지 두 벌로
+    // 나눠 관리할 이유는 없다.
     mealTimeInputs.forEach(({ id, pin, time }) => {
-      const block = store.blocks.find((b) => b.id === id);
-      if (!block) return;
-      if (pin.checked && time.value) {
-        block.anchor = "clock";
-        block.fixedAt = hhmmToBoundaryMinutes(time.value, s.dayBoundaryHour);
-      } else {
-        delete block.anchor;
-        delete block.fixedAt;
-      }
+      [store.blocks, store.semesterBlocks].forEach((list) => {
+        const block = list.find((b) => b.id === id);
+        if (!block) return;
+        if (pin.checked && time.value) {
+          block.anchor = "clock";
+          block.fixedAt = hhmmToBoundaryMinutes(time.value, s.dayBoundaryHour);
+        } else {
+          delete block.anchor;
+          delete block.fixedAt;
+        }
+      });
     });
-
-    // 학기 중 식사 시각은 블록을 고치지 않고 따로 얹는다 — 방학이 되면 그냥
-    // 안 쓰면 되고, 원래 시각을 되찾으려고 다시 입력할 필요가 없다.
-    s.semesterMeals = Object.fromEntries(semesterMealInputs.map(({ id, time }) => [id, time.value || ""]));
 
     saveStore(true);
     closeSheet();
