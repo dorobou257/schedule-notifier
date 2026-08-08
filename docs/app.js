@@ -861,6 +861,9 @@ function renderAgenda(now) {
         if (moved && moved.anchor === "clock" && !unpinned.has(movedId)) {
           store.dayTweaks.unpinned = [...(store.dayTweaks.unpinned || []), movedId];
         }
+        // 직접 끌어 옮긴 블록은 배치 규칙("여유는 gap 맨 뒤")보다 우선한다.
+        // 이 표식이 없으면 여유를 작업 앞으로 끌어도 매번 뒤로 되돌아간다.
+        if (moved) moved.manualOrder = true;
         store[key] = applyVisibleOrder(store[key], order);
         saveStore(true);
         // 안착 애니메이션이 끝난 뒤에 다시 그린다 — 곧바로 갈아끼우면
@@ -1494,8 +1497,11 @@ function renderEditor() {
   blocks.forEach((b) => list.appendChild(blockItem(b)));
   enableDragReorder(
     list,
-    (order) => {
+    (order, movedId) => {
       state.editorBlocks = order.map((id) => state.editorBlocks.find((b) => b.id === id));
+      // 메인 화면과 같은 표식 — 편집 시트에서 옮긴 것도 배치 규칙보다 우선한다.
+      const moved = state.editorBlocks.find((b) => b.id === movedId);
+      if (moved) moved.manualOrder = true;
     },
     (id) => openBlockEdit(id)
   );

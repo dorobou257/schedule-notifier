@@ -19,6 +19,8 @@
 //      없는 빈 gap이 남으면 남는 여유 블록을 그리로 옮긴다.
 //   5. 같은 gap에서 서로 붙은 여유는 하나로 합친다.
 //   6. gap 안의 순서는 준비 → 집필·작업(배열 순서) → 여유(배열 순서).
+//      단 사용자가 직접 끌어 옮긴 블록(manualOrder)은 이 규칙을 건너뛰고
+//      배열에 놓인 자리를 그대로 지킨다(orderWithin 참고).
 //
 // 배분이 gap을 정확히 채우므로 computeSchedule은 늘리거나 줄일 것이 없다 —
 // "무엇이 줄었다"는 제안이 매일 뜨지 않는다.
@@ -47,7 +49,9 @@ const isTimed = (b) => b.anchor === "clock";
  */
 export function placeIntoGaps({ blocks, lectures = [], weekday, wakeMinutes, sleepMinutes }) {
   const onToday = (b) => !b.days || b.days.includes(weekday);
-  const today = blocks.filter(onToday).map((b) => ({ ...b }));
+  // _i는 "루틴 배열에서 몇 번째였나"다. 사용자가 직접 끌어 옮긴 블록을 gap 안
+  // 제자리에 꽂을 때만 쓰고, 내보내기 전에 떼어낸다(mergeAdjacentBuffers).
+  const today = blocks.filter(onToday).map((b, i) => ({ ...b, _i: i }));
   const todayLectures = lectures.filter(onToday).map((l) => ({ ...l, isLecture: true }));
 
   const wakeBlock = today.find((b) => b.anchor === "wake");
@@ -164,7 +168,7 @@ export function placeIntoGaps({ blocks, lectures = [], weekday, wakeMinutes, sle
   const out = [];
   if (wakeBlock) out.push(wakeBlock);
   gaps.forEach((g) => {
-    out.push(...g.prep, ...g.work, ...g.buffers);
+    out.push(...orderWithin(g));
     if (g.closedBy && g.closedBy !== sleepBlock) out.push(g.closedBy);
   });
   if (sleepBlock) out.push(sleepBlock);
@@ -191,6 +195,32 @@ export function placeIntoGaps({ blocks, lectures = [], weekday, wakeMinutes, sle
 }
 
 /**
+ * gap 안의 순서를 정한다(규칙 6).
+ *
+ * 기본은 준비 → 집필·작업 → 여유다. 이 세 칸 규칙은 단순한 취향이 아니라
+ * 안전장치다 — 배열 순서를 곧이곧대로 따르면, 제 자리에서 밀려나 다른 gap으로
+ * 옮겨간 여유가 배열 번호만 보고 집필 사이를 파고든다. 사용자가 손대지도 않은
+ * 날의 순서까지 흔들리는 셈이다.
+ *
+ * 예외는 사용자가 직접 끌어 옮긴 블록(manualOrder)뿐이다. 그 블록만 배열에서의
+ * 자리(_i)를 기준으로 다시 꽂는다. "오후 여유를 작업 앞에 두고 싶다"는 뜻을
+ * 규칙이 되돌려 놓으면 순서 편집이 아무 일도 안 하는 것처럼 보인다.
+ */
+function orderWithin(gap) {
+  const base = [...gap.prep, ...gap.work, ...gap.buffers];
+  const manual = base.filter((b) => b.manualOrder);
+  if (!manual.length) return base;
+
+  // 끌지 않은 블록끼리는 기존 순서 그대로 두고, 끈 블록만 그 사이에 끼워 넣는다.
+  const out = base.filter((b) => !b.manualOrder);
+  for (const b of manual) {
+    const at = out.findIndex((x) => x._i > b._i);
+    out.splice(at === -1 ? out.length : at, 0, b);
+  }
+  return out;
+}
+
+/**
  * 같은 gap에서 서로 붙은 여유를 하나로 합친다. 운동이 없는 날의 "휴식"과
  * "밤 휴식"이 21시에 끊겨 보일 이유가 없다. 준비 시간은 합치지 않는다 —
  * 하루의 시작을 따로 보여주는 편이 낫다.
@@ -207,5 +237,6 @@ function mergeAdjacentBuffers(blocks) {
     out.push(b);
   }
   // gap은 배치용 내부 상태다 — 밖으로 내보내면 순환 참조로 JSON 직렬화가 깨진다.
-  return out.map(({ gap, isLecture, ...rest }) => rest);
+  // _i도 이 안에서만 쓰는 값이라 같이 떼어낸다.
+  return out.map(({ gap, isLecture, _i, ...rest }) => rest);
 }

@@ -219,6 +219,48 @@ test("한 자리 안에서는 준비 → 집필·작업 → 여유 순서다", (
   assert.ok(i("work") < i("gap"), "여유는 맨 뒤");
 });
 
+test("배열에서 여유를 앞으로 옮기기만 해서는 순서가 바뀌지 않는다", () => {
+  // 이 규칙이 있어야, 제 자리에서 밀려나 다른 gap으로 옮겨간 여유가 배열 번호만
+  // 보고 집필 사이를 파고드는 일이 없다.
+  const blocks = skeleton([block("gap", "여유", 60), block("work", "작업", 60, { minMinutes: 60 })]);
+  const r = run(blocks);
+  assert.ok(r.order.indexOf("work") < r.order.indexOf("gap"), "여유는 여전히 맨 뒤");
+});
+
+test("직접 끌어 옮긴 여유(manualOrder)는 작업 앞자리를 지킨다", () => {
+  const blocks = skeleton([
+    block("gap", "여유", 60, { manualOrder: true }),
+    block("work", "작업", 60, { minMinutes: 60 }),
+  ]);
+  const r = run(blocks);
+  const i = (id) => r.order.indexOf(id);
+  assert.ok(i("morning") < i("gap"), "준비 시간보다는 뒤");
+  assert.ok(i("gap") < i("work"), "끈 대로 작업보다 앞");
+});
+
+test("직접 끌어 옮긴 작업(manualOrder)은 여유 뒤로 갈 수 있다", () => {
+  // 반대 방향으로 끈 경우 — 끌린 쪽이 작업이어도 결과는 같아야 한다.
+  const blocks = skeleton([
+    block("gap", "여유", 60),
+    block("work", "작업", 60, { minMinutes: 60, manualOrder: true }),
+  ]);
+  const r = run(blocks);
+  assert.ok(r.order.indexOf("gap") < r.order.indexOf("work"));
+});
+
+test("manualOrder는 끌지 않은 블록끼리의 순서를 건드리지 않는다", () => {
+  const blocks = skeleton([
+    block("write", "집필", 60, { minMinutes: 60 }),
+    block("gap", "여유", 60, { manualOrder: true }),
+    block("work", "작업", 60, { minMinutes: 60 }),
+  ]);
+  const r = run(blocks);
+  const i = (id) => r.order.indexOf(id);
+  assert.ok(i("write") < i("gap"), "끈 여유는 배열대로 집필 뒤");
+  assert.ok(i("gap") < i("work"), "그리고 작업 앞");
+  assert.ok(i("write") < i("work"), "집필과 작업의 상대 순서는 그대로");
+});
+
 test("호출자의 블록 배열을 변형하지 않는다", () => {
   const blocks = skeleton([block("write", "집필", 120, { minMinutes: 60 })]);
   const before = JSON.stringify(blocks);
@@ -234,6 +276,7 @@ test("결과 블록에는 내부 상태(gap)가 새어 나오지 않는다", () 
     wakeMinutes: at("08:00"),
   });
   for (const b of r.blocks) assert.equal(b.gap, undefined);
+  for (const b of r.blocks) assert.equal(b._i, undefined, "배열 번호도 내부 값이다");
   assert.doesNotThrow(() => JSON.stringify(r.blocks), "순환 참조가 없어야 직렬화된다");
 });
 
