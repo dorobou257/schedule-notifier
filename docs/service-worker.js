@@ -1,12 +1,17 @@
-const SHELL_CACHE = "schedule-shell-v13";
+const SHELL_CACHE = "schedule-shell-v14";
+// import로 딸려 들어오는 모듈까지 빠짐없이 적어야 한다. 하나라도 빠지면 온라인
+// 에서는 멀쩡하다가(네트워크 우선) 오프라인에서만 그 모듈을 못 받아 앱이 아예
+// 안 열린다 — placement.js와 semester-2026-2.js가 그렇게 빠져 있었다.
 const SHELL_FILES = [
   "./",
   "./index.html",
   "./styles.css",
   "./routine.js",
   "./store.js",
+  "./semester-2026-2.js",
   "./novel-assign.js",
   "./lectures.js",
+  "./placement.js",
   "./drag.js",
   "./week.js",
   "./meal-suggest.js",
