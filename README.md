@@ -16,7 +16,7 @@
   - `manifest.json`, `service-worker.js`, `icon.svg`, `icon-*.png`, `apple-touch-icon.png` : 홈 화면 설치 + 오프라인 캐싱을 위한 PWA 필수 파일. `icon.svg`가 아이콘 도안의 원본이고 PNG들은 `tools/make_icons.py`가 같은 좌표로 그려낸 결과물이다.
   - `today.json` : `notify.py`가 매일 아침 자동으로 덮어쓰는 데이터(공휴일/특별 일정/할일/소설 + 오늘 알림 발송 여부). 워커가 죽었거나 오프라인일 때의 폴백이기도 하다.
 - `worker/` : 노션 중계 Cloudflare Worker. 앱은 정적 사이트라 노션을 직접 못 부르므로(토큰을 클라이언트에 둘 수 없고 CORS도 막힌다) 이 워커만 토큰을 안다. 배포 방법은 `worker/README.md`.
-- `tools/make_icons.py` : `docs/icon.svg`와 같은 도형으로 앱 아이콘(PNG)을 생성하는 로컬 전용 스크립트. 결과물만 커밋하며 CI에서는 실행하지 않는다(Pillow 필요). 도안을 고칠 땐 `icon.svg`와 이 스크립트의 `BARS`를 함께 고친다.
+- `tools/make_icons.py` : `docs/icon.svg`와 같은 도형으로 앱 아이콘(PNG)을 생성하는 로컬 전용 스크립트. 결과물만 커밋하며 CI에서는 실행하지 않는다(Pillow 필요). 도안을 고칠 땐 `icon.svg`와 이 스크립트의 좌표 상수(`FILLED` / `HOLLOW`) · 색 상수(`PLATE` / `MARK`)를 함께 고친다.
 - `tests/` : `npm test`(= `node --test tests/*.test.mjs`)로 한 번에 돌린다. 루틴 계산과 워커 로직 모두 검증하며 토큰 없이 실행된다.
 - `.github/workflows/daily-notify.yml` : 매일 아침 8시에 외부 크론이 깨우는 워크플로우 (today.json 갱신 + 알림 발송 + Pages 배포)
 - `.github/workflows/deploy-pages.yml` : `docs/`가 바뀐 푸시마다 Pages만 다시 배포하는 워크플로우. Pages가 브랜치가 아니라 워크플로우 아티팩트로 서비스되기 때문에, 이게 없으면 화면을 고쳐 푸시해도 다음 날 아침 `daily-notify`가 돌 때까지 반영되지 않는다.

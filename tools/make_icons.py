@@ -15,23 +15,24 @@ from PIL import Image, ImageDraw
 
 OUT_DIR = Path(__file__).parent.parent / "docs"
 
-# 색은 검정과 흰색 둘뿐. 중간 회색도 반투명도 쓰지 않으므로 어떤 크기로 줄여도
-# 그대로 읽히고, 참고지침(#241F19) 같은 다른 앱 아이콘과도 무게가 맞는다.
-BLACK = (0, 0, 0)
-WHITE = (255, 255, 255)
+# 색은 흰색 판과 검은 도안 둘뿐. 중간 회색도 반투명도 쓰지 않으므로 어떤 크기로
+# 줄여도 그대로 읽힌다. 이름이 색이 아니라 역할인 이유: 명암을 뒤집을 때 두 값만
+# 맞바꾸면 되고, 어느 도형이 판이고 어느 도형이 도안인지가 사용처에 드러난다.
+PLATE = (255, 255, 255)  # 바탕 판
+MARK = (0, 0, 0)  # 판 위에 얹는 도안
 
 # icon.svg 와 동일한 24 단위 좌표계.
 VIEWBOX = 24.0
 STROKE = 1.4  # 테두리 두께
 HEADER_BOTTOM = 9.9  # 채워진 헤더가 끝나는 높이
-# 흰색으로 채우는 도형. (x, y, w, h, radius)
+# 도안 색으로 채우는 도형. (x, y, w, h, radius)
 FILLED = [
     # 스프링 바인더 링. 아래끝은 몸체에 묻히므로 위로 솟은 부분만 보인다.
     (8.3, 3.2, 1.4, 3.8, 0.7),
     (14.3, 3.2, 1.4, 3.8, 0.7),
     (3.6, 6.5, 16.8, 14.0, 3.0),  # 몸체 — 일단 꽉 채운다
 ]
-# 도려낼 속. 흰 띠와 흰 테두리를 따로 그려 붙이면 둘이 만나는 자리에 한 픽셀짜리
+# 도려낼 속. 검은 띠와 검은 테두리를 따로 그려 붙이면 둘이 만나는 자리에 한 픽셀짜리
 # 계단이 남으므로, 채운 몸체에서 아래쪽을 빼는 방식으로 그린다. 위쪽 모서리는
 # 각져야(corners 인자) 헤더와의 경계가 일직선이 된다.
 BODY = FILLED[-1]
@@ -60,10 +61,10 @@ def render(size: int, *, mark_ratio: float, corner_ratio: float) -> Image.Image:
 
     if corner_ratio > 0:
         draw.rounded_rectangle(
-            [0, 0, canvas - 1, canvas - 1], radius=canvas * corner_ratio, fill=(*BLACK, 255)
+            [0, 0, canvas - 1, canvas - 1], radius=canvas * corner_ratio, fill=(*PLATE, 255)
         )
     else:
-        draw.rectangle([0, 0, canvas - 1, canvas - 1], fill=(*BLACK, 255))
+        draw.rectangle([0, 0, canvas - 1, canvas - 1], fill=(*PLATE, 255))
 
     mark = canvas * mark_ratio
     scale = mark / VIEWBOX
@@ -79,14 +80,14 @@ def render(size: int, *, mark_ratio: float, corner_ratio: float) -> Image.Image:
 
     for x, y, w, h, radius in FILLED:
         if radius > 0:
-            draw.rounded_rectangle(box(x, y, w, h), radius=radius * scale, fill=(*WHITE, 255))
+            draw.rounded_rectangle(box(x, y, w, h), radius=radius * scale, fill=(*MARK, 255))
         else:
-            draw.rectangle(box(x, y, w, h), fill=(*WHITE, 255))
+            draw.rectangle(box(x, y, w, h), fill=(*MARK, 255))
 
     draw.rounded_rectangle(
         box(*HOLLOW),
         radius=HOLLOW_RADIUS * scale,
-        fill=(*BLACK, 255),
+        fill=(*PLATE, 255),
         corners=(False, False, True, True),
     )
 
