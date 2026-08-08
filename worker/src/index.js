@@ -8,21 +8,26 @@
  * GET  /today?date=YYYY-MM-DD  오늘치 노션 데이터를 today.json과 같은 형태로.
  *                              항목마다 id와 done(완료 체크박스)이 붙는다.
  * GET  /week?start=YYYY-MM-DD  start부터 7일치를 날짜별로 담아서(주간 화면용).
- * PATCH /item  {id, done}      해당 노션 페이지의 "완료" 체크박스를 바꾼다.
- * POST  /item  {db, date, ...} 일정/할일/과제나 소설 일정을 노션에 새로 만든다.
+ * POST   /item {db, date, ...}  일정/할일/과제나 소설 일정을 노션에 새로 만든다.
+ * PATCH  /item {id, ...}        완료 체크·이름·종류·작품·날짜·시각을 고친다.
+ * DELETE /item {id}             해당 페이지를 노션 휴지통으로 보낸다(보관).
  *
  * 공개 PWA가 부르는 엔드포인트라 사용자 인증은 불가능하다. 대신
- * (1) CORS를 앱 도메인으로 고정하고 (2) PATCH 대상이 우리 두 DB에 속한
- * 최근 날짜 페이지인지 매번 다시 조회해서 확인한다. 그래서 최악의 경우도
- * "본인 오늘 할일 체크박스가 토글되는 것"에 그치고, 임의의 노션 페이지를
- * 건드리는 건 불가능하다.
+ * (1) CORS를 앱 도메인으로 고정하고 (2) 손대는 대상이 우리 두 DB에 속한
+ * 최근 날짜 페이지인지 매번 다시 조회해서 확인한다(ownPage). 그래서 최악의
+ * 경우도 "본인의 최근 며칠치 할일이 흔들리는 것"에 그치고, 임의의 노션
+ * 페이지를 건드리는 건 불가능하다.
  *
- * POST도 같은 강도로 막는다 — 인증이 없으니 **쓸 수 있는 모양 자체를 좁히는
- * 것**이 방어책이다. 대상 DB는 "schedule"/"novel" 두 이름으로만 고르고 실제
- * DB id는 env에서만 온다(클라이언트가 DB id를 보내지 못한다). 날짜는 PATCH와
- * 같은 ±PATCH_DAY_WINDOW 안이어야 하고, 종류·유형은 허용 목록과 정확히
- * 일치해야 하며, 그 밖의 속성은 아예 받지 않는다. 특히 "공휴일" 체크박스는
- * 만들 수 없다 — 그건 연간 스크립트(update_holidays.py)의 몫이다.
+ * 만들기·고치기는 같은 강도로 막는다 — 인증이 없으니 **쓸 수 있는 모양 자체를
+ * 좁히는 것**이 방어책이다. 대상 DB는 "schedule"/"novel" 두 이름으로만 고르고
+ * 실제 DB id는 env에서만 온다(클라이언트가 DB id를 보내지 못한다). 고칠 때는
+ * 그 이름조차 받지 않고 페이지의 부모 DB로 정한다. 날짜는 ±PATCH_DAY_WINDOW
+ * 안이어야 하고, 종류·유형은 허용 목록과 정확히 일치해야 하며, 그 밖의 속성은
+ * 아예 받지 않는다. 특히 "공휴일" 체크박스는 만들 수도 고칠 수도 없다 — 그건
+ * 연간 스크립트(update_holidays.py)의 몫이다.
+ *
+ * 지우기는 완전 삭제가 아니라 보관이다. 노션 휴지통에서 30일 동안 되살릴 수
+ * 있다 — 잘못 눌렀을 때 되돌릴 방법이 없으면 안 된다.
  *
  * 환경변수: NOTION_TOKEN(secret), SCHEDULE_DB_ID, NOVEL_DB_ID, ALLOWED_ORIGIN
  */
@@ -52,7 +57,7 @@ const MAX_TEXT = 200;
 function corsHeaders(env) {
   return {
     "Access-Control-Allow-Origin": env.ALLOWED_ORIGIN || "*",
-    "Access-Control-Allow-Methods": "GET, POST, PATCH, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type",
     "Access-Control-Max-Age": "86400",
     Vary: "Origin",
@@ -200,24 +205,51 @@ function buildTodayData(dateStr, schedulePages, novelPages) {
 const normalizeId = (id) => String(id || "").replace(/-/g, "").toLowerCase();
 
 /**
- * 이 페이지 id가 정말 우리 두 DB의 최근 날짜 항목인지 확인한다.
+ * 이 페이지 id가 정말 우리 두 DB의 최근 날짜 항목인지 확인하고, 맞으면 그
+ * 페이지와 어느 DB인지를 함께 돌려준다.
  *
  * 예전에는 오늘 ±3일 × DB 2개 = 14번을 순차로 조회해서 답을 찾았다. 체크박스
  * 한 번 누를 때마다 그게 다 돌아 몇 초씩 걸렸다. 페이지를 직접 한 번 읽으면
  * 부모 DB와 날짜가 같이 오므로 검증 강도는 그대로 두고 요청만 14 → 1이 된다.
+ *
+ * 어느 DB인지도 여기서 정한다 — 수정할 때 종류·유형을 어느 목록으로 검사할지
+ * 클라이언트에게 물으면 그 말을 믿어야 한다. 페이지의 부모가 답이다.
+ *
+ * @returns {{page: object, db: "schedule"|"novel"}|null}
  */
-async function isOwnPage(env, pageId) {
+async function ownPage(env, pageId) {
   const res = await fetch(`${NOTION_API}/pages/${pageId}`, { headers: notionHeaders(env) });
-  if (!res.ok) return false; // 없는 페이지거나 이 인티그레이션에 공유되지 않았다
+  if (!res.ok) return null; // 없는 페이지거나 이 인티그레이션에 공유되지 않았다
 
   const page = await res.json();
-  const ours = [env.SCHEDULE_DB_ID, env.NOVEL_DB_ID].map(normalizeId);
-  if (!ours.includes(normalizeId(page.parent?.database_id))) return false;
+  const parent = normalizeId(page.parent?.database_id);
+  const db = parent === normalizeId(env.SCHEDULE_DB_ID) ? "schedule" : parent === normalizeId(env.NOVEL_DB_ID) ? "novel" : null;
+  if (!db) return null;
 
   // 어제 못 지운 할일을 오늘 정리하는 정도는 되어야 하므로 앞뒤로 넉넉히 둔다.
+  if (!withinWindow(startDateOf(page))) return null;
+  return { page, db };
+}
+
+/** "HH:MM"이 실제로 존재하는 시각인지. \d{2}:\d{2}만 보면 25:00이 통과한다. */
+const isHHMM = (v) => /^([01]\d|2[0-3]):[0-5]\d$/.test(v);
+
+/** 이 앱이 건드릴 수 있는 날짜인지(오늘 ±PATCH_DAY_WINDOW). */
+function withinWindow(date) {
+  if (!date) return false;
   const today = todayKST();
+  return date >= shiftDate(today, -PATCH_DAY_WINDOW) && date <= shiftDate(today, PATCH_DAY_WINDOW);
+}
+
+/** 노션 date 속성 값. 시각이 있으면 KST 오프셋을 명시한다(안 그러면 아홉 시간 밀린다). */
+const dateValue = (date, time) => (time ? `${date}T${time}:00+09:00` : date);
+
+/** 만들어지거나 고쳐진 페이지를 조회 결과와 같은 항목 모양으로. */
+function itemOf(db, page) {
   const date = startDateOf(page);
-  return !!date && date >= shiftDate(today, -PATCH_DAY_WINDOW) && date <= shiftDate(today, PATCH_DAY_WINDOW);
+  const data = db === "novel" ? buildTodayData(date, [], [page]) : buildTodayData(date, [page], []);
+  const list = db === "novel" ? "novel_items" : getSelect(page, "종류") === "일정" ? "special_items" : "todo_items";
+  return { list, item: data[list][0] };
 }
 
 async function handleToday(request, env) {
@@ -255,6 +287,13 @@ async function handleWeek(request, env) {
   return json({ start, end, days, source: "worker" }, env);
 }
 
+/**
+ * 항목 고치기. 완료 체크만 하던 자리인데 이름·종류·작품·날짜·시각까지 받는다.
+ *
+ * 만들 때와 같은 허용 목록을 그대로 쓴다 — 만들 수 없는 것을 고쳐서 만들어낼 수
+ * 있으면 허용 목록이 무의미하다. 어느 목록으로 검사할지는 페이지의 부모 DB가
+ * 정한다(ownPage). 보내지 않은 속성은 건드리지 않는다.
+ */
 async function handleItem(request, env) {
   let body;
   try {
@@ -262,25 +301,98 @@ async function handleItem(request, env) {
   } catch {
     return json({ error: "본문을 읽을 수 없습니다." }, env, 400);
   }
-  const { id, done } = body || {};
-  if (typeof id !== "string" || !id || typeof done !== "boolean") {
-    return json({ error: "id(string)와 done(boolean)이 필요합니다." }, env, 400);
+  const { id, done, name, kind, work, date, time } = body || {};
+  if (typeof id !== "string" || !id) return json({ error: "id(string)가 필요합니다." }, env, 400);
+
+  const owned = await ownPage(env, id);
+  if (!owned) return json({ error: "이 앱이 다룰 수 있는 페이지가 아닙니다." }, env, 403);
+  const spec = CREATABLE[owned.db];
+
+  const properties = {};
+
+  if (done !== undefined) {
+    if (typeof done !== "boolean") return json({ error: "done은 boolean이어야 합니다." }, env, 400);
+    properties[DONE_PROP] = { checkbox: done };
   }
-  if (!(await isOwnPage(env, id))) {
-    return json({ error: "이 앱이 다룰 수 있는 페이지가 아닙니다." }, env, 403);
+
+  if (name !== undefined) {
+    const text = typeof name === "string" ? name.trim() : "";
+    if (!text || text.length > MAX_TEXT) return json({ error: "이름이 비었거나 너무 깁니다." }, env, 400);
+    properties["이름"] = { title: [{ text: { content: text } }] };
   }
+
+  if (kind !== undefined) {
+    if (!spec.kinds.includes(kind)) {
+      return json({ error: `${spec.prop}는 ${spec.kinds.join("/")} 중 하나여야 합니다.` }, env, 400);
+    }
+    properties[spec.prop] = { select: { name: kind } };
+  }
+
+  if (work !== undefined) {
+    if (owned.db !== "novel") return json({ error: "작품은 소설 일정에만 있습니다." }, env, 400);
+    const workName = typeof work === "string" ? work.trim() : "";
+    if (workName.length > MAX_TEXT) return json({ error: "작품 이름이 너무 깁니다." }, env, 400);
+    // 빈 값은 "지운다"는 뜻이다 — 작품을 잘못 붙였을 때 되돌릴 방법이 있어야 한다.
+    properties["작품"] = workName ? { select: { name: workName } } : { select: null };
+  }
+
+  if (date !== undefined || time !== undefined) {
+    // 시각만 고칠 때는 지금 적혀 있는 날짜를 그대로 쓴다.
+    const day = date === undefined ? startDateOf(owned.page) : date;
+    if (typeof day !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+      return json({ error: "날짜 형식이 잘못되었습니다." }, env, 400);
+    }
+    if (!withinWindow(day)) return json({ error: "이 앱이 다룰 수 있는 날짜가 아닙니다." }, env, 403);
+    if (time != null && time !== "" && !isHHMM(time)) {
+      return json({ error: "시각 형식이 잘못되었습니다." }, env, 400);
+    }
+    properties["날짜"] = { date: { start: dateValue(day, time) } };
+  }
+
+  if (!Object.keys(properties).length) return json({ error: "고칠 내용이 없습니다." }, env, 400);
 
   const res = await fetch(`${NOTION_API}/pages/${id}`, {
     method: "PATCH",
     headers: notionHeaders(env),
-    body: JSON.stringify({ properties: { [DONE_PROP]: { checkbox: done } } }),
+    body: JSON.stringify({ properties }),
   });
   if (!res.ok) {
     const text = await res.text();
     // "완료" 속성이 아직 없으면 노션이 400을 준다 — 원인을 그대로 알려준다.
     return json({ error: `노션 수정 실패(${res.status})`, detail: text }, env, 502);
   }
-  return json({ ok: true, id, done }, env);
+  // done만 보낸 예전 호출도 그대로 쓰던 응답을 받는다.
+  return json({ ok: true, id, ...(done !== undefined ? { done } : {}), ...itemOf(owned.db, await res.json()) }, env);
+}
+
+/**
+ * 항목 지우기. 노션에서 "지운다"는 건 보관(휴지통으로 옮기기)이다 — 30일 동안
+ * 되살릴 수 있다. 잘못 눌렀을 때 되돌릴 방법이 없으면 안 되므로 완전 삭제는
+ * 하지 않는다(체크해도 목록에서 안 지우는 것과 같은 이유다).
+ */
+async function handleDeleteItem(request, env) {
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return json({ error: "본문을 읽을 수 없습니다." }, env, 400);
+  }
+  const { id } = body || {};
+  if (typeof id !== "string" || !id) return json({ error: "id(string)가 필요합니다." }, env, 400);
+  if (!(await ownPage(env, id))) {
+    return json({ error: "이 앱이 다룰 수 있는 페이지가 아닙니다." }, env, 403);
+  }
+
+  const res = await fetch(`${NOTION_API}/pages/${id}`, {
+    method: "PATCH",
+    headers: notionHeaders(env),
+    body: JSON.stringify({ archived: true }),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    return json({ error: `노션 보관 실패(${res.status})`, detail: text }, env, 502);
+  }
+  return json({ ok: true, id, archived: true }, env);
 }
 
 /** 앱이 만든 항목을 노션 페이지로 남긴다. 받을 수 있는 모양은 CREATABLE이 전부다. */
@@ -307,20 +419,15 @@ async function handleCreateItem(request, env) {
     return json({ error: "날짜 형식이 잘못되었습니다." }, env, 400);
   }
   // 체크와 같은 범위. "오늘 할 일을 적는다"가 이 앱의 쓰임이라 그 밖으로 나갈 이유가 없다.
-  const today = todayKST();
-  if (date < shiftDate(today, -PATCH_DAY_WINDOW) || date > shiftDate(today, PATCH_DAY_WINDOW)) {
-    return json({ error: "이 앱이 다룰 수 있는 날짜가 아닙니다." }, env, 403);
-  }
+  if (!withinWindow(date)) return json({ error: "이 앱이 다룰 수 있는 날짜가 아닙니다." }, env, 403);
 
-  if (time != null && time !== "" && !/^\d{2}:\d{2}$/.test(time)) {
+  if (time != null && time !== "" && !isHHMM(time)) {
     return json({ error: "시각 형식이 잘못되었습니다." }, env, 400);
   }
-  // 시각을 붙일 땐 KST 오프셋을 명시한다. 안 붙이면 노션이 UTC로 읽어 아홉 시간이 밀린다.
-  const start = time ? `${date}T${time}:00+09:00` : date;
 
   const properties = {
     이름: { title: [{ text: { content: text } }] },
-    날짜: { date: { start } },
+    날짜: { date: { start: dateValue(date, time) } },
     [spec.prop]: { select: { name: kind } },
   };
   if (db === "novel") {
@@ -338,12 +445,8 @@ async function handleCreateItem(request, env) {
     const detail = await res.text();
     return json({ error: `노션 생성 실패(${res.status})`, detail }, env, 502);
   }
-  const page = await res.json();
-
   // 목록에 그대로 꽂을 수 있도록 조회 결과와 같은 모양으로 돌려준다.
-  const data = db === "novel" ? buildTodayData(date, [], [page]) : buildTodayData(date, [page], []);
-  const list = db === "novel" ? "novel_items" : kind === "일정" ? "special_items" : "todo_items";
-  return json({ ok: true, list, item: data[list][0] }, env);
+  return json({ ok: true, ...itemOf(db, await res.json()) }, env);
 }
 
 export default {
@@ -361,6 +464,7 @@ export default {
       if (request.method === "GET" && url.pathname === "/week") return await handleWeek(request, env);
       if (request.method === "PATCH" && url.pathname === "/item") return await handleItem(request, env);
       if (request.method === "POST" && url.pathname === "/item") return await handleCreateItem(request, env);
+      if (request.method === "DELETE" && url.pathname === "/item") return await handleDeleteItem(request, env);
     } catch (e) {
       return json({ error: String(e && e.message ? e.message : e) }, env, 502);
     }

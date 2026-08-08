@@ -32,7 +32,10 @@ function scrollParentOf(el) {
 
 // 순서 편집이 아닐 때의 "꾹 누르기". 드래그(300ms)보다 조금 길게 잡아
 // 실수로 발동하지 않게 한다. 8px 넘게 움직이면 스크롤로 보고 취소.
-export function enableLongPress(listEl, itemSelector, onLongPress) {
+//
+// skipSelector에 걸리는 것(체크박스·버튼 등)에서 시작한 누름은 무시한다.
+// 그 위에서 꾹 누르면 시트가 열리는 동시에 손을 뗄 때 그 컨트롤까지 눌린다.
+export function enableLongPress(listEl, itemSelector, onLongPress, skipSelector) {
   let target = null;
   let startY = 0;
   let timer = null;
@@ -46,6 +49,7 @@ export function enableLongPress(listEl, itemSelector, onLongPress) {
 
   listEl.addEventListener("pointerdown", (e) => {
     if (target) return;
+    if (skipSelector && e.target.closest(skipSelector)) return;
     const li = e.target.closest(itemSelector);
     if (!li || !listEl.contains(li)) return;
     target = li;

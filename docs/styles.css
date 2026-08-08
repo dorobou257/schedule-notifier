@@ -240,6 +240,9 @@ button.card-add:active{ background:var(--surface-2); }
 ul.rows{ margin:0; padding:0 6px 6px; list-style:none; }
 li.row{ display:flex; align-items:flex-start; gap:10px; padding:9px 10px 9px 12px; border-left:4px solid transparent; border-radius:8px; }
 li.row + li.row{ margin-top:1px; }
+/* 꾹 누르면 수정·제거 시트가 열린다. 누르는 동안 글씨가 잡히면 안 된다. */
+li.row{ user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; transition:transform .12s ease; }
+li.row.pressing{ transform:scale(0.97); box-shadow:var(--shadow); }
 li.row[data-cat="write"]{ border-left-color:var(--cat-write); }
 li.row[data-cat="work"]{ border-left-color:var(--cat-work); }
 li.row[data-cat="exercise"]{ border-left-color:var(--cat-exercise); }

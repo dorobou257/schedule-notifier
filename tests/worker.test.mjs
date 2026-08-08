@@ -109,8 +109,9 @@ test("GET /today: 날짜 형식이 잘못되면 400", async () => {
 });
 
 test("PATCH /item: 우리 DB의 페이지면 완료 체크박스를 바꾼다", async () => {
+  const updated = page("p2", { 이름: title("장보기"), 종류: select("할일"), 완료: checkbox(true), 날짜: dateProp(kstDay(0)) });
   const stub = stubFetch((url, init) => {
-    if (init.method === "PATCH") return jsonRes({ object: "page" });
+    if (init.method === "PATCH") return jsonRes(updated);
     return jsonRes(pageDetail("p2", "db-schedule", kstDay(0)));
   });
   try {
@@ -119,7 +120,13 @@ test("PATCH /item: 우리 DB의 페이지면 완료 체크박스를 바꾼다", 
       ENV
     );
     assert.equal(res.status, 200);
-    assert.deepEqual(await res.json(), { ok: true, id: "p2", done: true });
+    const data = await res.json();
+    assert.equal(data.ok, true);
+    assert.equal(data.id, "p2");
+    assert.equal(data.done, true);
+    // 고친 결과도 목록에 그대로 꽂을 수 있는 모양으로 돌아온다.
+    assert.equal(data.list, "todo_items");
+    assert.deepEqual(data.item, { id: "p2", time: "", tags: ["할일"], text: "장보기", done: true });
 
     const patch = stub.calls.find((c) => c.method === "PATCH");
     assert.equal(patch.url, "https://api.notion.com/v1/pages/p2");
@@ -135,7 +142,7 @@ test("PATCH /item: 우리 DB의 페이지면 완료 체크박스를 바꾼다", 
 
 test("PATCH /item: 소설 DB 페이지도 허용하고, id 하이픈 유무는 상관없다", async () => {
   const stub = stubFetch((url, init) => {
-    if (init.method === "PATCH") return jsonRes({ object: "page" });
+    if (init.method === "PATCH") return jsonRes(page("n1", { 이름: title("50화"), 날짜: dateProp(kstDay(0)) }));
     // 노션은 부모 id를 하이픈 붙은 형태로 준다. 환경변수는 하이픈이 없을 수 있다.
     return jsonRes(pageDetail("n1", "db-nov-el", kstDay(0)));
   });
@@ -195,13 +202,198 @@ test("PATCH /item: 노션이 페이지를 못 찾으면(404) 403으로 막는다
   }
 });
 
-test("PATCH /item: id나 done이 빠지면 400", async () => {
+test("PATCH /item: id가 빠지거나 본문이 JSON이 아니면 노션을 부르지도 않고 400", async () => {
   const stub = stubFetch(() => jsonRes({ results: [] }));
   try {
-    for (const body of ['{"id":"p2"}', '{"done":true}', "{}", "not json"]) {
+    for (const body of ['{"done":true}', "{}", "not json"]) {
       const res = await worker.fetch(new Request("https://w.dev/item", { method: "PATCH", body }), ENV);
       assert.equal(res.status, 400, `body=${body}`);
     }
+    assert.equal(stub.calls.length, 0);
+  } finally {
+    stub.restore();
+  }
+});
+
+// --- PATCH /item : 완료 체크 말고 내용까지 고친다 ---------------------------
+
+/** 우리 DB의 페이지를 흉내 내고, 고쳐진 결과를 돌려주는 stub. */
+function editStub(db = "db-schedule", updated = null) {
+  return stubFetch((url, init) => {
+    if (init.method === "PATCH") {
+      return jsonRes(updated || page("p9", { 이름: title("고친 이름"), 종류: select("과제"), 날짜: dateProp(kstDay(0)) }));
+    }
+    return jsonRes(pageDetail("p9", db, kstDay(0)));
+  });
+}
+
+const patchItem = (body, env = ENV) =>
+  worker.fetch(new Request("https://w.dev/item", { method: "PATCH", body: JSON.stringify(body) }), env);
+
+test("PATCH /item: 이름·종류·날짜·시각을 함께 고친다", async () => {
+  const stub = editStub();
+  try {
+    const res = await patchItem({ id: "p9", name: "고친 이름", kind: "과제", date: kstDay(1), time: "09:00" });
+    assert.equal(res.status, 200);
+    const sent = stub.calls.find((c) => c.method === "PATCH").body;
+    assert.deepEqual(sent, {
+      properties: {
+        이름: { title: [{ text: { content: "고친 이름" } }] },
+        종류: { select: { name: "과제" } },
+        날짜: { date: { start: `${kstDay(1)}T09:00:00+09:00` } },
+      },
+    });
+    assert.equal(sent.properties.완료, undefined, "보내지 않은 속성은 건드리지 않는다");
+  } finally {
+    stub.restore();
+  }
+});
+
+test("PATCH /item: 시각만 고치면 지금 적힌 날짜를 그대로 쓴다", async () => {
+  const stub = editStub();
+  try {
+    await patchItem({ id: "p9", time: "18:00" });
+    const sent = stub.calls.find((c) => c.method === "PATCH").body;
+    assert.deepEqual(sent.properties.날짜, { date: { start: `${kstDay(0)}T18:00:00+09:00` } });
+  } finally {
+    stub.restore();
+  }
+});
+
+test("PATCH /item: 시각을 비우면 날짜만 남는다", async () => {
+  const stub = editStub();
+  try {
+    await patchItem({ id: "p9", time: "" });
+    const sent = stub.calls.find((c) => c.method === "PATCH").body;
+    assert.deepEqual(sent.properties.날짜, { date: { start: kstDay(0) } });
+  } finally {
+    stub.restore();
+  }
+});
+
+test("PATCH /item: 어느 목록으로 검사할지는 페이지의 부모 DB가 정한다", async () => {
+  // 일정 DB 페이지에 소설 유형을 넣으려는 시도. 클라이언트가 db를 보내도 안 먹힌다.
+  const stub = editStub("db-schedule");
+  try {
+    const res = await patchItem({ id: "p9", db: "novel", kind: "초고" });
+    assert.equal(res.status, 400);
+    assert.match((await res.json()).error, /종류/);
+    assert.equal(stub.calls.some((c) => c.method === "PATCH"), false);
+  } finally {
+    stub.restore();
+  }
+
+  // 반대 방향도 마찬가지.
+  const stub2 = editStub("db-novel");
+  try {
+    assert.equal((await patchItem({ id: "p9", kind: "할일" })).status, 400);
+    assert.equal((await patchItem({ id: "p9", kind: "초고" })).status, 200);
+  } finally {
+    stub2.restore();
+  }
+});
+
+test("PATCH /item: 작품은 소설 항목에만 붙고, 빈 값은 지우라는 뜻이다", async () => {
+  const stub = editStub("db-novel", page("p9", { 이름: title("50화"), 유형: select("초고"), 날짜: dateProp(kstDay(0)) }));
+  try {
+    await patchItem({ id: "p9", work: "챌린지" });
+    assert.deepEqual(stub.calls.find((c) => c.method === "PATCH").body.properties.작품, { select: { name: "챌린지" } });
+  } finally {
+    stub.restore();
+  }
+
+  const stub2 = editStub("db-novel", page("p9", { 이름: title("50화"), 유형: select("초고"), 날짜: dateProp(kstDay(0)) }));
+  try {
+    await patchItem({ id: "p9", work: "  " });
+    assert.deepEqual(stub2.calls.find((c) => c.method === "PATCH").body.properties.작품, { select: null });
+  } finally {
+    stub2.restore();
+  }
+
+  const stub3 = editStub("db-schedule");
+  try {
+    assert.equal((await patchItem({ id: "p9", work: "챌린지" })).status, 400, "일정 DB엔 작품이 없다");
+    assert.equal(stub3.calls.some((c) => c.method === "PATCH"), false);
+  } finally {
+    stub3.restore();
+  }
+});
+
+test("PATCH /item: 고치는 것도 만들 때와 같은 경계를 지킨다", async () => {
+  const cases = [
+    [{ id: "p9", kind: "공휴일" }, 400],
+    [{ id: "p9", name: "" }, 400],
+    [{ id: "p9", name: "가".repeat(201) }, 400],
+    [{ id: "p9", date: "2030-01-01" }, 403],
+    [{ id: "p9", date: "내일" }, 400],
+    [{ id: "p9", time: "25:00" }, 400],
+    [{ id: "p9", done: "네" }, 400],
+    [{ id: "p9" }, 400], // 고칠 내용이 없다
+    [{ id: "p9", 공휴일: true, 완료: true }, 400], // 모르는 키는 무시 → 고칠 내용 없음
+  ];
+  for (const [body, status] of cases) {
+    const stub = editStub();
+    try {
+      assert.equal((await patchItem(body)).status, status, JSON.stringify(body));
+      assert.equal(stub.calls.some((c) => c.method === "PATCH"), false, JSON.stringify(body));
+    } finally {
+      stub.restore();
+    }
+  }
+});
+
+// --- DELETE /item : 노션 휴지통으로 ----------------------------------------
+
+const deleteItem = (body) =>
+  worker.fetch(new Request("https://w.dev/item", { method: "DELETE", body: JSON.stringify(body) }), ENV);
+
+test("DELETE /item: 우리 DB의 페이지를 보관한다(완전 삭제가 아니다)", async () => {
+  const stub = stubFetch((url, init) =>
+    init.method === "PATCH" ? jsonRes({ object: "page", archived: true }) : jsonRes(pageDetail("p3", "db-schedule", kstDay(0)))
+  );
+  try {
+    const res = await deleteItem({ id: "p3" });
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), { ok: true, id: "p3", archived: true });
+
+    const patch = stub.calls.find((c) => c.method === "PATCH");
+    assert.equal(patch.url, "https://api.notion.com/v1/pages/p3");
+    assert.deepEqual(patch.body, { archived: true }, "속성은 건드리지 않는다");
+  } finally {
+    stub.restore();
+  }
+});
+
+test("DELETE /item: 남의 페이지·범위 밖 날짜·없는 id는 403", async () => {
+  for (const detail of [
+    pageDetail("x", "db-남의것", kstDay(0)),
+    pageDetail("x", "db-schedule", kstDay(9)),
+  ]) {
+    const stub = stubFetch(() => jsonRes(detail));
+    try {
+      assert.equal((await deleteItem({ id: "x" })).status, 403);
+      assert.equal(stub.calls.some((c) => c.method === "PATCH"), false);
+    } finally {
+      stub.restore();
+    }
+  }
+
+  const stub = stubFetch(() => new Response("not found", { status: 404 }));
+  try {
+    assert.equal((await deleteItem({ id: "없는id" })).status, 403);
+  } finally {
+    stub.restore();
+  }
+});
+
+test("DELETE /item: id가 없으면 노션을 부르지도 않고 400", async () => {
+  const stub = stubFetch(() => jsonRes({}));
+  try {
+    assert.equal((await deleteItem({})).status, 400);
+    assert.equal(
+      (await worker.fetch(new Request("https://w.dev/item", { method: "DELETE", body: "not json" }), ENV)).status,
+      400
+    );
     assert.equal(stub.calls.length, 0);
   } finally {
     stub.restore();
@@ -434,7 +626,7 @@ test("GET /diag는 더 이상 없다(DB id를 아무에게나 알려주지 않�
 test("OPTIONS 프리플라이트와 알 수 없는 경로", async () => {
   const opt = await worker.fetch(new Request("https://w.dev/item", { method: "OPTIONS" }), ENV);
   assert.equal(opt.status, 204);
-  assert.equal(opt.headers.get("Access-Control-Allow-Methods"), "GET, POST, PATCH, OPTIONS");
+  assert.equal(opt.headers.get("Access-Control-Allow-Methods"), "GET, POST, PATCH, DELETE, OPTIONS");
 
   const nf = await worker.fetch(new Request("https://w.dev/nope"), ENV);
   assert.equal(nf.status, 404);

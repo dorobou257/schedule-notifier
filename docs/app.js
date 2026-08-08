@@ -363,44 +363,55 @@ function writePending(list) {
   }
 }
 
-function queuePending(id, done) {
+/**
+ * 밀린 작업 하나를 큐에 넣는다.
+ *   { kind: "patch",  id, done }      완료 토글
+ *   { kind: "create", tempId, payload } 새 항목
+ *   { kind: "edit",   payload }       이름·종류·날짜 등 수정
+ *   { kind: "delete", id }            보관(휴지통)
+ */
+function queuePending(entry) {
   // 같은 항목을 여러 번 토글했으면 마지막 상태만 보내면 된다.
-  const list = readPending().filter((p) => !(p.kind === "patch" && p.id === id));
-  list.push({ kind: "patch", id, done });
+  const list = readPending().filter((p) => !(entry.kind === "patch" && p.kind === "patch" && p.id === entry.id));
+  list.push(entry);
   writePending(list);
 }
 
-function queueCreate(payload) {
-  writePending([...readPending(), { kind: "create", payload }]);
+/** 아직 못 올려보낸 만들기의 내용을 고친다(노션에 페이지가 없으니 고칠 대상도 그것뿐이다). */
+function amendQueuedCreate(payload, item) {
+  if (!item.tempId) return;
+  writePending(readPending().map((p) => (p.kind === "create" && p.tempId === item.tempId ? { ...p, payload } : p)));
 }
 
-async function patchNotion(id, done) {
-  const res = await fetch(`${WORKER_URL.replace(/\/$/, "")}/item`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ id, done }),
-    signal: AbortSignal.timeout(PATCH_TIMEOUT_MS),
-  });
-  if (!res.ok) throw new Error("patch " + res.status);
+/** 아직 못 올려보낸 만들기를 취소한다. 안 그러면 지운 항목이 다음에 되살아난다. */
+function cancelQueuedCreate(item) {
+  if (!item.tempId) return;
+  writePending(readPending().filter((p) => !(p.kind === "create" && p.tempId === item.tempId)));
 }
 
-/** 노션에 페이지를 만든다. @returns 워커가 돌려준 { list, item } */
-async function createNotion(payload) {
+async function sendItem(method, body) {
   const res = await fetch(`${WORKER_URL.replace(/\/$/, "")}/item`, {
-    method: "POST",
+    method,
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
+    body: JSON.stringify(body),
     signal: AbortSignal.timeout(PATCH_TIMEOUT_MS),
   });
   if (!res.ok) {
-    const err = new Error("create " + res.status);
+    const err = new Error(`${method} ${res.status}`);
     // 400/403은 다시 보내도 같은 답이 온다(형식이 틀렸거나 날짜 범위 밖).
     // 큐에 남겨두면 앱을 열 때마다 영영 재시도한다 — 그런 건 버린다.
     err.permanent = res.status >= 400 && res.status < 500;
     throw err;
   }
-  return res.json();
+  return res.json().catch(() => null);
 }
+
+/** 완료 토글이든 내용 수정이든 같은 경로다. @returns 워커가 돌려준 { list, item } */
+const patchNotion = (body) => sendItem("PATCH", body);
+/** 노션에 페이지를 만든다. @returns 워커가 돌려준 { list, item } */
+const createNotion = (payload) => sendItem("POST", payload);
+/** 노션 휴지통으로 보낸다(완전 삭제가 아니다). */
+const deleteNotion = (id) => sendItem("DELETE", { id });
 
 /** 밀린 것들을 순서대로 보낸다. 하나라도 실패하면 그것부터 다시 큐에 남긴다. */
 async function flushPendingChecks() {
@@ -411,7 +422,9 @@ async function flushPendingChecks() {
   for (const item of list) {
     try {
       if (item.kind === "create") await createNotion(item.payload);
-      else await patchNotion(item.id, item.done);
+      else if (item.kind === "edit") await patchNotion(item.payload);
+      else if (item.kind === "delete") await deleteNotion(item.id);
+      else await patchNotion({ id: item.id, done: item.done });
     } catch (e) {
       if (!e?.permanent) remaining.push(item);
     }
@@ -424,10 +437,10 @@ async function setItemDone(item, done) {
   item.done = done; // 화면에 이미 반영된 상태(낙관적)
   if (!WORKER_URL) return true; // 워커가 없으면 이 기기에만 남는다
   try {
-    await patchNotion(item.id, done);
+    await patchNotion({ id: item.id, done });
     return true;
   } catch {
-    queuePending(item.id, done);
+    queuePending({ kind: "patch", id: item.id, done });
     setStatus("노션에 바로 반영하지 못했습니다. 다음에 열 때 다시 시도합니다.");
     return false;
   }
@@ -663,10 +676,15 @@ function renderSpecialScheduleCard(items, now) {
   head.appendChild(el("span", { className: "icon", innerHTML: ICONS.clock }));
   head.appendChild(el("h2", { textContent: "오늘의 일정" }));
   head.appendChild(el("span", { className: "count", textContent: items.length + "건" }));
+  const add = el("button", { className: "card-add", title: "항목 추가", innerHTML: ICONS.plus });
+  add.addEventListener("click", () => openItemSheet("todo"));
+  head.appendChild(add);
   section.appendChild(head);
   const ul = el("ul", { className: "rows" });
   items.forEach((it) => {
     const li = el("li", { className: "row" });
+    li._item = it;
+    li._section = "todo"; // 종류가 "일정"인 할일 DB 항목이다
     // 이미 지난 시각이면 흐리게 — 표시가 없으면 한밤중에 "06:00 가족 휴가"가
     // 내일 아침 일정처럼 읽힌다(실사용 중 실제로 겪은 혼란).
     const time = (it.time || "").trim();
@@ -678,6 +696,7 @@ function renderSpecialScheduleCard(items, now) {
     ul.appendChild(li);
   });
   section.appendChild(ul);
+  enableLongPress(ul, "li.row", (li) => openItemActionSheet(li._item, li._section));
   return section;
 }
 
@@ -894,7 +913,7 @@ function card(iconHtml, title, items, sectionType) {
   head.appendChild(el("span", { className: "count", textContent: countText }));
   if (sectionType === "todo" || sectionType === "novel") {
     const add = el("button", { className: "card-add", title: "항목 추가", innerHTML: ICONS.plus });
-    add.addEventListener("click", () => openCreateSheet(sectionType));
+    add.addEventListener("click", () => openItemSheet(sectionType));
     head.appendChild(add);
   }
   section.appendChild(head);
@@ -903,6 +922,9 @@ function card(iconHtml, title, items, sectionType) {
     const ul = el("ul", { className: "rows" });
     items.forEach((it) => ul.appendChild(notionRow(it, sectionType)));
     section.appendChild(ul);
+    // 꾹 누르면 고치거나 지운다. 체크박스·배정 버튼 위에서 시작한 누름은 뺀다 —
+    // 손을 뗄 때 그것들까지 눌리면 안 된다.
+    enableLongPress(ul, "li.row", (li) => openItemActionSheet(li._item, li._section), ".row-check, .row-assign");
   } else {
     section.appendChild(el("p", { className: "empty", textContent: "등록된 항목이 없습니다." }));
   }
@@ -916,6 +938,10 @@ function notionRow(item, sectionType) {
   else if (sectionType === "novel") cat = NOVEL_STAGE_CAT[tags[1]] || "other";
 
   const li = el("li", { className: "row", dataset: { cat } });
+  // 꾹 누르기 콜백이 항목 자체를 되찾을 수 있게 붙여둔다. 매번 다시 그리므로
+  // 여기 달린 참조가 낡을 일은 없다.
+  li._item = item;
+  li._section = sectionType;
 
   // 노션 페이지 id가 있는 항목만 체크할 수 있다(id 없이는 어느 페이지인지
   // 특정할 수 없다 — today.json이 아직 갱신되지 않은 경우).
@@ -1652,28 +1678,55 @@ function knownWorks() {
   return [...seen];
 }
 
+/** 이 항목이 지금 어느 목록에 들어 있는지. 종류를 바꾸면 자리도 옮겨간다. */
+function findItem(item) {
+  for (const listKey of ["special_items", "todo_items", "novel_items"]) {
+    const at = (state.todayData?.[listKey] || []).indexOf(item);
+    if (at >= 0) return { listKey, at };
+  }
+  return null;
+}
+
+/** 화면에서 항목 하나를 빼거나(next=null) 다른 것으로 갈아끼운다. */
+function replaceItem(item, next, nextListKey) {
+  const found = findItem(item);
+  if (!found) return;
+  const list = state.todayData[found.listKey];
+  if (!next) {
+    list.splice(found.at, 1);
+  } else if (!nextListKey || nextListKey === found.listKey) {
+    list[found.at] = next;
+  } else {
+    list.splice(found.at, 1);
+    state.todayData[nextListKey] = [...(state.todayData[nextListKey] || []), next];
+  }
+}
+
 /**
- * 할일·과제·일정이나 소설 일정을 노션에 새로 만든다.
+ * 항목을 만들거나 고치는 시트. existing이 있으면 그 값으로 채워 연다.
  *
- * 화면에는 먼저 꽂고(낙관적) 워커가 돌려준 진짜 페이지 id로 갈아끼운다 —
+ * 만들 때는 화면에 먼저 꽂고(낙관적) 워커가 돌려준 진짜 페이지 id로 갈아끼운다 —
  * 그래야 방금 만든 항목의 완료 체크가 곧바로 동작한다. 워커가 없거나 실패하면
  * 큐에 쌓아두고, id가 없는 채로 남아 체크박스만 붙지 않는다.
  */
-function openCreateSheet(sectionType) {
+function openItemSheet(sectionType, existing = null) {
   state.activeSheet = "create";
   const isNovel = sectionType === "novel";
   const todayKey = logicalDateKey(new Date(), store.settings.dayBoundaryHour);
+  const tags = (existing?.tags || []).filter(Boolean);
+  // 소설은 [작품, 유형], 일정·할일은 [종류]. 종류가 없는 특별 일정은 "일정"이다.
+  const curKind = (isNovel ? tags[1] : tags[0]) || (isNovel ? "초고" : "일정");
 
-  const nameInput = el("input", { type: "text", placeholder: isNovel ? "예) 3화 초고" : "예) 과제 제출" });
-  const kindSelect = selectField(CREATE_KINDS[sectionType], CREATE_KINDS[sectionType][0]);
+  const nameInput = el("input", { type: "text", placeholder: isNovel ? "예) 3화 초고" : "예) 과제 제출", value: existing?.text || "" });
+  const kindSelect = selectField(CREATE_KINDS[sectionType], curKind);
   const dateInput = el("input", { type: "date", value: todayKey });
-  const timeInput = el("input", { type: "time", value: "" });
+  const timeInput = el("input", { type: "time", value: existing?.time || "" });
 
   const body = [fieldRow("이름", nameInput), fieldRow(isNovel ? "유형" : "종류", kindSelect)];
 
   let workInput = null;
   if (isNovel) {
-    workInput = el("input", { type: "text", placeholder: "작품 이름" });
+    workInput = el("input", { type: "text", placeholder: "작품 이름", value: tags[0] || "" });
     // input.list는 읽기 전용이라 프로퍼티로는 못 붙인다.
     workInput.setAttribute("list", "work-suggest");
     const datalist = el("datalist", { id: "work-suggest" });
@@ -1681,43 +1734,61 @@ function openCreateSheet(sectionType) {
     body.push(fieldRow("작품", workInput), datalist);
   }
   body.push(fieldRow("날짜", dateInput), fieldRow("시각(선택)", timeInput));
-  body.push(el("p", { className: "sheet-note", textContent: "노션에도 같은 항목이 만들어집니다. 연결이 안 되면 다음에 열 때 다시 보냅니다." }));
+  body.push(
+    el("p", {
+      className: "sheet-note",
+      textContent: existing
+        ? "노션의 같은 페이지도 함께 바뀝니다. 연결이 안 되면 다음에 열 때 다시 보냅니다."
+        : "노션에도 같은 항목이 만들어집니다. 연결이 안 되면 다음에 열 때 다시 보냅니다.",
+    })
+  );
 
-  const saveBtn = el("button", { className: "btn btn--primary", textContent: "추가" });
+  const saveBtn = el("button", { className: "btn btn--primary", textContent: existing ? "저장" : "추가" });
   saveBtn.addEventListener("click", async () => {
     const name = nameInput.value.trim();
     if (!name) {
       nameInput.focus();
       return;
     }
-    const kind = kindSelect.value;
     const payload = {
       db: isNovel ? "novel" : "schedule",
       date: dateInput.value || todayKey,
       name,
-      kind,
-      ...(isNovel && workInput.value.trim() ? { work: workInput.value.trim() } : {}),
-      ...(timeInput.value ? { time: timeInput.value } : {}),
+      kind: kindSelect.value,
+      // 고칠 때는 빈 작품도 보낸다 — 잘못 붙인 작품을 지울 방법이 있어야 한다.
+      ...(isNovel && (existing || workInput.value.trim()) ? { work: workInput.value.trim() } : {}),
+      ...(existing || timeInput.value ? { time: timeInput.value } : {}),
     };
     closeSheet();
-    await addItem(sectionType, payload);
+    if (existing) await editItem(sectionType, existing, payload);
+    else await addItem(sectionType, payload);
   });
   const cancelBtn = el("button", { className: "btn btn--ghost", textContent: "취소" });
   cancelBtn.addEventListener("click", closeSheet);
 
-  openSheet(isNovel ? "소설 일정 추가" : "할일 추가", null, body, [cancelBtn, saveBtn]);
+  const title = existing ? "항목 수정" : isNovel ? "소설 일정 추가" : "할일 추가";
+  openSheet(title, null, body, [cancelBtn, saveBtn]);
 }
 
-async function addItem(sectionType, payload) {
-  const listKey = listKeyFor(sectionType, payload.kind);
+/** 워커에 보낸 payload로 화면에 꽂을 항목 모양을 만든다(낙관적 반영용). */
+function localItemOf(sectionType, payload, base = {}) {
   const local = {
-    id: null,
+    id: base.id ?? null,
+    // 아직 노션에 못 올라간 항목을 큐의 만들기와 이어주는 끈. 화면 안에서만 산다.
+    ...(base.tempId ? { tempId: base.tempId } : {}),
     time: payload.time || "",
     tags: sectionType === "novel" ? [payload.work || "", payload.kind] : [payload.kind],
     text: payload.name,
-    done: false,
+    done: !!base.done,
   };
   if (payload.kind === "일정") delete local.tags;
+  return local;
+}
+
+async function addItem(sectionType, payload) {
+  const tempId = "tmp-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+  const local = localItemOf(sectionType, payload, { tempId });
+  const listKey = listKeyFor(sectionType, payload.kind);
 
   if (!state.todayData) state.todayData = {};
   state.todayData[listKey] = [...(state.todayData[listKey] || []), local];
@@ -1727,19 +1798,98 @@ async function addItem(sectionType, payload) {
   try {
     const res = await createNotion(payload);
     // 낙관적으로 꽂아둔 자리를 워커가 돌려준 진짜 항목으로 갈아끼운다.
-    const list = state.todayData[res.list] || [];
-    const at = list.indexOf(local);
-    if (at >= 0) list[at] = res.item;
-    else state.todayData[res.list] = [...list, res.item];
+    replaceItem(local, res.item, res.list);
   } catch (e) {
-    if (e?.permanent) {
-      setStatus("노션이 받지 못한 항목입니다. 날짜와 종류를 확인해 주세요.");
-    } else {
-      queueCreate(payload);
+    if (e?.permanent) setStatus("노션이 받지 못한 항목입니다. 날짜와 종류를 확인해 주세요.");
+    else {
+      queuePending({ kind: "create", tempId, payload });
       setStatus("노션에 바로 반영하지 못했습니다. 다음에 열 때 다시 시도합니다.");
     }
   }
   renderShell();
+}
+
+async function editItem(sectionType, item, payload) {
+  const next = localItemOf(sectionType, payload, item);
+  replaceItem(item, next, listKeyFor(sectionType, payload.kind));
+  renderShell();
+
+  // 아직 노션에 못 올라간 항목이면 고칠 페이지가 없다 — 큐에 쌓아둔 만들기를 고친다.
+  if (!item.id) {
+    amendQueuedCreate(payload, item);
+    renderShell();
+    return;
+  }
+  if (!WORKER_URL) return;
+
+  const { db, ...fields } = payload; // 어느 DB인지는 워커가 페이지에서 직접 읽는다
+  try {
+    const res = await patchNotion({ id: item.id, ...fields });
+    if (res?.item) replaceItem(next, res.item, res.list);
+  } catch (e) {
+    if (e?.permanent) setStatus("노션이 받지 못한 수정입니다. 날짜와 종류를 확인해 주세요.");
+    else {
+      queuePending({ kind: "edit", payload: { id: item.id, ...fields } });
+      setStatus("노션에 바로 반영하지 못했습니다. 다음에 열 때 다시 시도합니다.");
+    }
+  }
+  renderShell();
+}
+
+async function removeItem(item) {
+  replaceItem(item, null);
+  renderShell();
+
+  if (!item.id) {
+    // 큐에만 있던 항목이라면 만들기 자체를 취소한다 — 안 그러면 지운 게 되살아난다.
+    cancelQueuedCreate(item);
+    renderShell();
+    return;
+  }
+  if (!WORKER_URL) return;
+
+  try {
+    await deleteNotion(item.id);
+  } catch (e) {
+    if (e?.permanent) setStatus("노션에서 지우지 못했습니다. 이 기기에서만 사라집니다.");
+    else {
+      queuePending({ kind: "delete", id: item.id });
+      setStatus("노션에 바로 반영하지 못했습니다. 다음에 열 때 다시 시도합니다.");
+    }
+  }
+  renderShell();
+}
+
+/** 항목을 꾹 눌렀을 때 — 고칠지 지울지 고른다. */
+function openItemActionSheet(item, sectionType) {
+  if (!item) return;
+  state.activeSheet = "item";
+  const tags = (item.tags || []).filter(Boolean);
+
+  const editBtn = el("button", { className: "btn btn--primary", textContent: "수정" });
+  editBtn.addEventListener("click", () => {
+    closeSheet();
+    openItemSheet(sectionType, item);
+  });
+  const delBtn = el("button", { className: "btn btn--danger", textContent: "제거" });
+  delBtn.addEventListener("click", () => {
+    closeSheet();
+    removeItem(item);
+  });
+  const cancelBtn = el("button", { className: "btn btn--ghost", textContent: "닫기" });
+  cancelBtn.addEventListener("click", closeSheet);
+
+  openSheet(
+    item.text || "항목",
+    [item.time, tags.join(" · ")].filter(Boolean).join(" · ") || null,
+    [
+      el("p", {
+        className: "sheet-note",
+        textContent: "제거하면 노션에서도 사라집니다. 완전히 지우는 게 아니라 노션 휴지통으로 가니, 30일 안에는 되살릴 수 있습니다.",
+      }),
+    ],
+    [cancelBtn, delBtn, editBtn]
+  );
 }
 
 /** 오늘 이 강의가 없다고(휴강·공강) 표시하는 시트. 내일은 원래대로 돌아온다. */
